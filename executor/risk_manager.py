@@ -8,14 +8,14 @@ VIRTUAL_BALANCE = 10000.0  # Max exposure for safety
 
 async def load_exposure(js: JetStreamContext) -> float:
     try:
-        kv = await js.key_value("wallet_state")
+        kv = await js.key_value("mercury_wallet_state")
         entry = await kv.get("current_exposure")
         return float(entry.value.decode())
     except Exception:
         return 0.0
 
 async def save_exposure(js: JetStreamContext, new_exposure: float):
-    kv = await js.key_value("wallet_state")
+    kv = await js.key_value("mercury_wallet_state")
     await kv.put("current_exposure", str(new_exposure).encode())
 
 async def check_risk(signal: TradeSignal, js: JetStreamContext) -> bool:

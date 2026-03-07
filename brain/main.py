@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from core.nats_utils import get_jetstream
-from core.schemas import StreamEvent
+from core.schemas import MarketEvent
 from brain.strategies.moving_average import evaluate_moving_average
 
 logging.basicConfig(level=logging.INFO)
@@ -12,16 +12,17 @@ async def main():
     js = await get_jetstream()
     logger.info("Brain service started. Ready to think.")
     
+    # Optional: explicitly add stream if it doesn't exist, though Nephtys handles this usually
     try:
-        await js.add_stream(name="market_data", subjects=["market.*"])
+        await js.add_stream(name="nephtys_crypto", subjects=["nephtys.stream.crypto.*"])
     except Exception:
         pass
         
     async def market_handler(msg):
         try:
             data = json.loads(msg.data.decode())
-            # Parse into StreamEvent schema expected from Nephtys
-            event = StreamEvent(**data)
+            # Parse into MarketEvent schema expected from Nephtys
+            event = MarketEvent(**data)
             
             signal = evaluate_moving_average(event)
             if signal:
@@ -32,9 +33,8 @@ async def main():
         except Exception as e:
             logger.error(f"Error processing market data: {e}")
 
-    # Subscribe to market feed using a durable consumer (assuming Nephtys publishes to market.prices or similar)
-    # The actual Nephtys subject depends on its stream config, but "market.*" is a good default
-    sub = await js.subscribe("market.*", durable="brain_service", cb=market_handler)
+    # Subscribe to the Nephtys BTC stream
+    sub = await js.subscribe("nephtys.stream.crypto.btc", durable="brain_service", cb=market_handler)
 
     while True:
         await asyncio.sleep(1)

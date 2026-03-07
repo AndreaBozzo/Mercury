@@ -1,8 +1,8 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 from typing import Optional, Any, Dict
 from datetime import datetime
 
-class StreamEvent(BaseModel):
+class MarketEvent(BaseModel):
     source: str
     type: str
     timestamp: int
@@ -15,4 +15,6 @@ class TradeSignal(BaseModel):
     order_type: str  # "MARKET" or "LIMIT"
     quantity: float
     price: Optional[float] = None
+    confidence_score: float = 1.0
+    allocation_percentage: float = 0.0
     timestamp: datetime
