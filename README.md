@@ -5,10 +5,12 @@
 </div>
 
 ---
-
+ 
+ > *Named after the Roman god of commerce, financial gain, and messages — the swift messenger who bridges the gap between intelligence and action.*
+ 
 Mercury is an autonomous cryptocurrency trading agent built using Python. It relies on a microservice architecture communicating exclusively over a NATS JetStream message broker. Mercury is designed to securely decouple the intelligence layer (which analyzes data and makes decisions) from the execution layer (which holds sensitive API keys and touches funds).
 
-Mercury is the sister project to **Nephtys** (the data pipeline connector). Nephtys handles connecting to Binance webhooks, formatting data into a normalized stream, and publishing it to NATS. Mercury subscribes to those streams.
+Mercury is the sister project to [Nephtys](https://github.com/AndreaBozzo/Nephtys) (the data pipeline connector). Nephtys handles connecting to Binance webhooks, formatting data into a normalized stream, and publishing it to NATS. Mercury subscribes to those streams.
 
 ## Architecture
 
