@@ -1,0 +1,13 @@
+[project]
+name = "mercury"
+version = "0.1.0"
+description = "Autonomous Trading Agent"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "ccxt>=4.5.42",
+    "nats-py>=2.14.0",
+    "pandas>=3.0.1",
+    "pydantic>=2.12.5",
+    "python-dotenv>=1.2.2",
+]

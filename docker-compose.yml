@@ -1,0 +1,29 @@
+version: '3.8'
+
+services:
+  nats:
+    image: nats:latest
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: ["-js"] # Enable JetStream
+
+  brain:
+    build:
+      context: .
+      dockerfile: brain/Dockerfile
+    environment:
+      - NATS_URL=nats://nats:4222
+    depends_on:
+      - nats
+
+  executor:
+    build:
+      context: .
+      dockerfile: executor/Dockerfile
+    environment:
+      - NATS_URL=nats://nats:4222
+    env_file:
+      - .env
+    depends_on:
+      - nats
