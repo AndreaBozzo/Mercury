@@ -1,5 +1,5 @@
 import os
-import ccxt
+import ccxt.async_support as ccxt
 import logging
 from core.schemas import TradeSignal
 from dotenv import load_dotenv
@@ -21,7 +21,7 @@ def get_exchange():
     exchange.set_sandbox_mode(True)
     return exchange
 
-def execute_trade(signal: TradeSignal):
+async def execute_trade(signal: TradeSignal):
     """
     Executes a trade on the exchange using CCXT.
     """
@@ -29,11 +29,14 @@ def execute_trade(signal: TradeSignal):
     logger.info(f"Executing {signal.action} {signal.quantity} {signal.symbol} on {exchange.id} (SANDBOX)...")
     
     # Example execution:
-    # try:
-    #     if signal.action == "BUY":
-    #         order = exchange.create_market_buy_order(signal.symbol, signal.quantity)
-    #     elif signal.action == "SELL":
-    #         order = exchange.create_market_sell_order(signal.symbol, signal.quantity)
-    #     logger.info(f"Order executed: {order}")
-    # except Exception as e:
-    #     logger.error(f"Failed to execute trade: {e}")
+    try:
+        # if signal.action == "BUY":
+        #     order = await exchange.create_market_buy_order(signal.symbol, signal.quantity)
+        # elif signal.action == "SELL":
+        #     order = await exchange.create_market_sell_order(signal.symbol, signal.quantity)
+        # logger.info(f"Order executed: {order}")
+        pass
+    except Exception as e:
+        logger.error(f"Failed to execute trade: {e}")
+    finally:
+        await exchange.close()

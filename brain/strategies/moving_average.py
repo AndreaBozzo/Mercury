@@ -1,12 +1,16 @@
-from core.schemas import TradeSignal
+from core.schemas import TradeSignal, StreamEvent
 from datetime import datetime
 
-def evaluate_moving_average(market_data: dict) -> TradeSignal | None:
+def evaluate_moving_average(event: StreamEvent) -> TradeSignal | None:
     """
-    Evaluates market data and returns a TradeSignal if conditions are met.
+    Evaluates market data stream event and returns a TradeSignal if conditions are met.
     """
-    symbol = market_data.get("symbol", "BTC/USDT")
-    price = market_data.get("price", 0.0)
+    # Assuming the Nephtys payload contains symbol and price after our transformation
+    payload = event.payload
+    symbol = payload.get("symbol", "BTC/USDT")
+    price = payload.get("price", 0.0)
+    
+    # In a real moving average strategy we would keep state of previous prices here
     
     if price > 50000:  # arbitrary benchmark for template
         return TradeSignal(

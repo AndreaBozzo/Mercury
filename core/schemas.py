@@ -1,6 +1,12 @@
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, ConfigDict
+from typing import Optional, Any, Dict
 from datetime import datetime
+
+class StreamEvent(BaseModel):
+    source: str
+    type: str
+    timestamp: int
+    payload: Dict[str, Any]
 
 class TradeSignal(BaseModel):
     strategy_id: str
