@@ -4,13 +4,19 @@ import pytest
 
 from core.schemas import TradeSignal
 from executor.risk_manager import (
+    DEFAULT_MAX_EXPOSURE_DOLLARS,
+    DEFAULT_MAX_TRADE_NOTIONAL_DOLLARS,
     EXPOSURE_KEY,
     HALT_KEY,
+    RISK_LIMITS_KEY,
     check_risk,
+    default_risk_limits,
     load_halt_flag,
     load_position_states,
+    load_risk_limits,
     record_trade_execution,
     save_position_states,
+    save_risk_limits,
 )
 
 
@@ -104,6 +110,56 @@ async def test_record_trade_execution_reduces_exposure_for_sell_orders():
 
     assert new_exposure == 0.0
     assert float(kv.store[EXPOSURE_KEY].decode()) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_load_risk_limits_defaults_when_missing():
+    js = FakeJetStream(FakeKV())
+
+    limits = await load_risk_limits(js)
+
+    assert limits == default_risk_limits()
+
+
+@pytest.mark.asyncio
+async def test_check_risk_uses_dynamic_kv_limits_for_buys():
+    kv = FakeKV(
+        {
+            EXPOSURE_KEY: b"100",
+            RISK_LIMITS_KEY: (
+                b'{"max_exposure_dollars": 400, "max_trade_notional_dollars": 200, '
+                b'"sentiment_score": -0.6, "source": "test", "rationale": "bad news"}'
+            ),
+        }
+    )
+    js = FakeJetStream(kv)
+
+    allowed = await check_risk(make_signal(), js)
+
+    assert allowed is False
+
+
+@pytest.mark.asyncio
+async def test_save_and_load_risk_limits_round_trip():
+    kv = FakeKV()
+    js = FakeJetStream(kv)
+
+    await save_risk_limits(
+        js,
+        {
+            "max_exposure_dollars": DEFAULT_MAX_EXPOSURE_DOLLARS / 2,
+            "max_trade_notional_dollars": DEFAULT_MAX_TRADE_NOTIONAL_DOLLARS / 2,
+            "sentiment_score": -0.8,
+            "source": "llm",
+            "rationale": "severe negative sentiment",
+        },
+    )
+
+    limits = await load_risk_limits(js)
+
+    assert limits["max_exposure_dollars"] == DEFAULT_MAX_EXPOSURE_DOLLARS / 2
+    assert limits["max_trade_notional_dollars"] == DEFAULT_MAX_TRADE_NOTIONAL_DOLLARS / 2
+    assert limits["source"] == "llm"
 
 
 @pytest.mark.asyncio

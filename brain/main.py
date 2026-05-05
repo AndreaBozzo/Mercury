@@ -21,10 +21,11 @@ import os
 
 from brain.adapters.binance_depth import BinanceDepthBootstrapper, parse_binance_depth
 from brain.observability import health_payload, json_response, metrics_payload
-from brain.strategies.moving_average import MovingAverageStrategy
+from brain.strategies import build_strategy_from_env
 from core.nats_utils import get_jetstream
 from core.order_book import OrderBook
 from core.schemas import MarketEvent, OrderBookDelta, OrderBookSnapshot
+from core.symbols import normalize_symbol
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("brain")
@@ -33,7 +34,7 @@ _books: dict[str, OrderBook] = {}
 _depth_bootstraps: dict[str, BinanceDepthBootstrapper] = {}
 _signal_counts: dict[tuple[str, str], int] = {}
 _book_gap_counts: dict[str, int] = {}
-_strategy = MovingAverageStrategy()
+_strategy = build_strategy_from_env()
 _BRAIN_HTTP_HOST = os.getenv("BRAIN_HTTP_HOST", "127.0.0.1")
 _BRAIN_HTTP_PORT = int(os.getenv("BRAIN_HTTP_PORT", "9108"))
 
@@ -61,6 +62,25 @@ def _record_signal_emitted(action: str, symbol: str) -> None:
 
 def _record_book_gap(symbol: str) -> None:
     _book_gap_counts[symbol] = _book_gap_counts.get(symbol, 0) + 1
+
+
+def _event_with_book_features(event: MarketEvent) -> MarketEvent:
+    payload = dict(event.payload)
+    try:
+        symbol = normalize_symbol(payload.get("symbol"))
+    except ValueError:
+        return event
+
+    book = _books.get(symbol)
+    if book is None or not book.is_ready:
+        return event
+
+    levels = book.levels()
+    payload.setdefault("symbol", symbol)
+    payload.setdefault("mid", levels.get("mid"))
+    payload.setdefault("spread", levels.get("spread"))
+    payload.setdefault("imbalance", levels.get("imbalance"))
+    return event.model_copy(update={"payload": payload})
 
 
 async def _serve_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -222,7 +242,7 @@ async def handle_market_event(event: MarketEvent, js, broker_sequence: int | Non
 
     else:
         # L1 path: trade / ticker events from Nephtys today
-        signal = _strategy.evaluate(event)
+        signal = _strategy.evaluate(_event_with_book_features(event))
         if signal:
             await js.publish("trade.signals", signal.model_dump_json().encode())
             _record_signal_emitted(signal.action, signal.symbol)
