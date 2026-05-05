@@ -61,6 +61,7 @@ class OrderBook:
         """Replace the entire book with a fresh L2 snapshot."""
         self._bids.clear()
         self._asks.clear()
+        self._gap_buffer.clear()
         for price, qty in bids:
             if qty > 0:
                 self._bids[float(price)] = float(qty)

@@ -13,7 +13,7 @@ This document tracks what it would take to turn Mercury from a working proof-of-
 | Moving average strategy | ✅ Working | Toy signal, no edge |
 | Risk manager | ✅ Working | Virtual balance only |
 | Exchange client (CCXT) | 🟡 Wired, commented out | Needs testnet validation |
-| L2 order book | 🟡 Batch adapter built, tested | Needs snapshot bootstrap/recovery |
+| L2 order book | 🟡 Batch adapter + snapshot bootstrap built, tested | Needs live validation |
 | Arrow IPC internal transport | ✅ Built, tested | Not yet used on live subjects |
 | Bytewax stream processor | ✅ Built | Not yet replacing brain/main.py in prod |
 | Backtester (Lance + Ray) | ✅ Built, tested | No historical data yet |
@@ -37,7 +37,7 @@ The order book module now applies raw Binance depth batches atomically:
 ```
 wss://stream.binance.com:9443/ws/btcusdt@depth@100ms
 ```
-Nephtys should stay generic: classify the event as `depthUpdate`, preserve the exchange timestamp and sequence, and publish the raw payload. Mercury owns the Binance-specific adapter and applies each `[U, u]` update range as one atomic order-book mutation. The remaining production gap is snapshot bootstrap: fetch REST depth snapshot, discard stale updates, then apply the first buffered event where `U <= lastUpdateId + 1 <= u`.
+Nephtys should stay generic: classify the event as `depthUpdate`, preserve the exchange timestamp and sequence, and publish the raw payload. Mercury owns the Binance-specific adapter and applies each `[U, u]` update range as one atomic order-book mutation. Bootstrap now follows Binance's local-book procedure: buffer stream updates, fetch the REST depth snapshot, discard stale buffered updates, then apply the first buffered event where `U <= lastUpdateId + 1 <= u`.
 
 ### 1.3 Prometheus metrics
 Nephtys already has a Prometheus endpoint (`prometheus.yml` in its compose). Wire Mercury services to expose:

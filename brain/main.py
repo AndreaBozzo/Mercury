@@ -18,7 +18,7 @@ import asyncio
 import json
 import logging
 
-from brain.adapters.binance_depth import parse_binance_depth
+from brain.adapters.binance_depth import BinanceDepthBootstrapper, parse_binance_depth
 from brain.strategies.moving_average import MovingAverageStrategy
 from core.nats_utils import get_jetstream
 from core.order_book import OrderBook
@@ -28,6 +28,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("brain")
 
 _books: dict[str, OrderBook] = {}
+_depth_bootstraps: dict[str, BinanceDepthBootstrapper] = {}
 _strategy = MovingAverageStrategy()
 
 
@@ -35,6 +36,12 @@ def _book(symbol: str) -> OrderBook:
     if symbol not in _books:
         _books[symbol] = OrderBook(symbol)
     return _books[symbol]
+
+
+def _depth_bootstrap(symbol: str) -> BinanceDepthBootstrapper:
+    if symbol not in _depth_bootstraps:
+        _depth_bootstraps[symbol] = BinanceDepthBootstrapper(symbol)
+    return _depth_bootstraps[symbol]
 
 
 async def main() -> None:
@@ -75,15 +82,23 @@ async def main() -> None:
                 if update is None:
                     logger.warning("Invalid depthUpdate payload from %s", event.source)
                 else:
-                    ok = _book(update.symbol).apply_delta_batch(
-                        bids=update.bids,
-                        asks=update.asks,
-                        first_seq=update.first_seq,
-                        final_seq=update.final_seq,
-                    )
+                    book = _book(update.symbol)
+                    bootstrap = _depth_bootstrap(update.symbol)
+                    if not book.is_ready or bootstrap.is_active:
+                        ok = await bootstrap.handle_update(update, book)
+                    else:
+                        ok = book.apply_delta_batch(
+                            bids=update.bids,
+                            asks=update.asks,
+                            first_seq=update.first_seq,
+                            final_seq=update.final_seq,
+                        )
+                        if not ok:
+                            ok = await bootstrap.handle_update(update, book)
+
                     if not ok:
                         logger.warning(
-                            "[%s] Seq gap on depthUpdate range=[%d,%d] — re-snapshot needed",
+                            "[%s] Buffering depthUpdate range=[%d,%d] during bootstrap",
                             update.symbol,
                             update.first_seq,
                             update.final_seq,

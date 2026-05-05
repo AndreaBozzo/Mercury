@@ -1,4 +1,14 @@
-from brain.adapters.binance_depth import parse_binance_depth
+import asyncio
+
+import pytest
+
+from brain.adapters.binance_depth import (
+    BinanceDepthBootstrapper,
+    BinanceDepthSnapshot,
+    BinanceDepthUpdate,
+    parse_binance_depth,
+)
+from core.order_book import OrderBook
 from core.schemas import MarketEvent
 
 
@@ -49,3 +59,133 @@ def test_parse_binance_depth_uses_envelope_seq_when_payload_u_missing():
 
     assert update is not None
     assert update.final_seq == 12
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_discards_stale_updates_and_applies_first_overlap():
+    async def fetch_snapshot(symbol: str) -> BinanceDepthSnapshot:
+        return BinanceDepthSnapshot(
+            symbol=symbol,
+            last_update_id=100,
+            bids=[[100.0, 1.0]],
+            asks=[[101.0, 1.0]],
+        )
+
+    book = OrderBook("BTC/USDT")
+    bootstrap = BinanceDepthBootstrapper("BTC/USDT", fetch_snapshot=fetch_snapshot)
+
+    stale = BinanceDepthUpdate(
+        symbol="BTC/USDT",
+        first_seq=90,
+        final_seq=100,
+        timestamp=1,
+        bids=[[99.0, 5.0]],
+        asks=[],
+    )
+    first_live = BinanceDepthUpdate(
+        symbol="BTC/USDT",
+        first_seq=101,
+        final_seq=102,
+        timestamp=2,
+        bids=[[100.5, 2.0]],
+        asks=[],
+    )
+
+    assert not await bootstrap.handle_update(stale, book)
+    await asyncio.sleep(0)
+
+    assert await bootstrap.handle_update(first_live, book)
+    assert book.is_ready
+    assert book._seq == 102
+    assert book.best_bid == (100.5, 2.0)
+    assert 99.0 not in book._bids
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_buffers_updates_while_snapshot_fetch_is_pending():
+    release_fetch = asyncio.Event()
+
+    async def fetch_snapshot(symbol: str) -> BinanceDepthSnapshot:
+        await release_fetch.wait()
+        return BinanceDepthSnapshot(
+            symbol=symbol,
+            last_update_id=100,
+            bids=[[100.0, 1.0]],
+            asks=[[101.0, 1.0]],
+        )
+
+    book = OrderBook("BTC/USDT")
+    bootstrap = BinanceDepthBootstrapper("BTC/USDT", fetch_snapshot=fetch_snapshot)
+
+    first_live = BinanceDepthUpdate(
+        symbol="BTC/USDT",
+        first_seq=101,
+        final_seq=102,
+        timestamp=1,
+        bids=[[100.5, 2.0]],
+        asks=[],
+    )
+    second_live = BinanceDepthUpdate(
+        symbol="BTC/USDT",
+        first_seq=103,
+        final_seq=103,
+        timestamp=2,
+        bids=[],
+        asks=[[101.5, 4.0]],
+    )
+
+    assert not await bootstrap.handle_update(first_live, book)
+    assert not await bootstrap.handle_update(second_live, book)
+
+    release_fetch.set()
+    await asyncio.sleep(0)
+
+    trigger = BinanceDepthUpdate(
+        symbol="BTC/USDT",
+        first_seq=104,
+        final_seq=104,
+        timestamp=3,
+        bids=[[100.6, 1.0]],
+        asks=[],
+    )
+
+    assert await bootstrap.handle_update(trigger, book)
+    assert book._seq == 104
+    assert book.best_bid == (100.6, 1.0)
+    assert book.best_ask == (101.0, 1.0)
+    assert book._asks[101.5] == 4.0
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_restarts_when_first_live_update_has_gap():
+    calls = 0
+
+    async def fetch_snapshot(symbol: str) -> BinanceDepthSnapshot:
+        nonlocal calls
+        calls += 1
+        return BinanceDepthSnapshot(
+            symbol=symbol,
+            last_update_id=100,
+            bids=[[100.0, 1.0]],
+            asks=[[101.0, 1.0]],
+        )
+
+    book = OrderBook("BTC/USDT")
+    bootstrap = BinanceDepthBootstrapper("BTC/USDT", fetch_snapshot=fetch_snapshot)
+
+    gap = BinanceDepthUpdate(
+        symbol="BTC/USDT",
+        first_seq=105,
+        final_seq=106,
+        timestamp=1,
+        bids=[[105.0, 1.0]],
+        asks=[],
+    )
+
+    assert not await bootstrap.handle_update(gap, book)
+    await asyncio.sleep(0)
+    assert not await bootstrap.handle_update(gap, book)
+
+    assert calls == 1
+    assert not book.is_ready
+    assert bootstrap.is_active
