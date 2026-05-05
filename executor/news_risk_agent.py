@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+import shlex
 import subprocess
 import time
 from collections.abc import Iterable
@@ -20,6 +21,8 @@ NEWS_RISK_BRIDGE_PATH = os.getenv(
     "NEWS_RISK_BRIDGE_PATH",
     "/home/andrea/Documenti/lancedb-nephtys-bridge",
 )
+NEWS_RISK_BRIDGE_SERVICE_URL = os.getenv("NEWS_RISK_BRIDGE_SERVICE_URL", "").rstrip("/")
+NEWS_RISK_BRIDGE_PYTHON = os.getenv("NEWS_RISK_BRIDGE_PYTHON", "").strip()
 NEWS_RISK_QUERY = os.getenv(
     "NEWS_RISK_QUERY",
     "bitcoin exchange hack insolvency liquidation fraud sanctions regulation outage",
@@ -27,6 +30,7 @@ NEWS_RISK_QUERY = os.getenv(
 NEWS_RISK_QUERY_LIMIT = int(os.getenv("NEWS_RISK_QUERY_LIMIT", "8"))
 NEWS_RISK_QUERY_SOURCE = os.getenv("NEWS_RISK_QUERY_SOURCE", "")
 NEWS_RISK_QUERY_EVENT_TYPE = os.getenv("NEWS_RISK_QUERY_EVENT_TYPE", "")
+NEWS_RISK_QUERY_SYMBOL = os.getenv("NEWS_RISK_QUERY_SYMBOL", "")
 NEWS_RISK_QUERY_MAX_AGE_SECONDS = int(os.getenv("NEWS_RISK_QUERY_MAX_AGE_SECONDS", "86400"))
 NEWS_RISK_ANALYZER = os.getenv("NEWS_RISK_ANALYZER", "heuristic").strip().lower()
 NEWS_RISK_LLM_API_KEY = os.getenv("NEWS_RISK_LLM_API_KEY")
@@ -87,13 +91,73 @@ async def main() -> None:
 
 
 def query_bridge_texts() -> list[str]:
+    if NEWS_RISK_BRIDGE_SERVICE_URL:
+        return query_bridge_texts_via_service()
+
+    return query_bridge_texts_via_cli()
+
+
+def query_bridge_texts_via_service() -> list[str]:
+    params = _bridge_query_params()
+
+    try:
+        response = requests.get(
+            f"{NEWS_RISK_BRIDGE_SERVICE_URL}/query",
+            params=params,
+            timeout=20,
+        )
+        response.raise_for_status()
+    except Exception:
+        logger.exception("Bridge query service request failed")
+        return []
+
+    return extract_bridge_texts(response.text)
+
+
+def query_bridge_texts_via_cli() -> list[str]:
     if not os.path.isdir(NEWS_RISK_BRIDGE_PATH):
         logger.warning("Bridge path %s does not exist", NEWS_RISK_BRIDGE_PATH)
         return []
 
+    command = _bridge_query_cli_command()
+    completed = subprocess.run(
+        command,
+        cwd=NEWS_RISK_BRIDGE_PATH,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        logger.warning(
+            "Bridge query failed via %s: %s",
+            shlex.join(command),
+            completed.stderr.strip(),
+        )
+        return []
+    return extract_bridge_texts(completed.stdout)
+
+
+def _bridge_query_params() -> list[tuple[str, str]]:
+    params: list[tuple[str, str]] = [
+        ("q", NEWS_RISK_QUERY),
+        ("limit", str(NEWS_RISK_QUERY_LIMIT)),
+        ("all_namespaces", "true"),
+    ]
+    if NEWS_RISK_QUERY_SOURCE:
+        params.append(("source", NEWS_RISK_QUERY_SOURCE))
+    if NEWS_RISK_QUERY_EVENT_TYPE:
+        params.append(("event_type", NEWS_RISK_QUERY_EVENT_TYPE))
+    if NEWS_RISK_QUERY_SYMBOL:
+        params.append(("symbol", NEWS_RISK_QUERY_SYMBOL))
+    if NEWS_RISK_QUERY_MAX_AGE_SECONDS >= 0:
+        params.append(("max_age_seconds", str(NEWS_RISK_QUERY_MAX_AGE_SECONDS)))
+    return params
+
+
+def _bridge_query_cli_command() -> list[str]:
+    bridge_python = _bridge_python_executable()
     command = [
-        "uv",
-        "run",
+        bridge_python,
         "query.py",
         NEWS_RISK_QUERY,
         "--limit",
@@ -105,19 +169,21 @@ def query_bridge_texts() -> list[str]:
         command.extend(["--source", NEWS_RISK_QUERY_SOURCE])
     if NEWS_RISK_QUERY_EVENT_TYPE:
         command.extend(["--event-type", NEWS_RISK_QUERY_EVENT_TYPE])
+    if NEWS_RISK_QUERY_SYMBOL:
+        command.extend(["--symbol", NEWS_RISK_QUERY_SYMBOL])
     if NEWS_RISK_QUERY_MAX_AGE_SECONDS >= 0:
         command.extend(["--max-age-seconds", str(NEWS_RISK_QUERY_MAX_AGE_SECONDS)])
-    completed = subprocess.run(
-        command,
-        cwd=NEWS_RISK_BRIDGE_PATH,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if completed.returncode != 0:
-        logger.warning("Bridge query failed: %s", completed.stderr.strip())
-        return []
-    return extract_bridge_texts(completed.stdout)
+    return command
+
+
+def _bridge_python_executable() -> str:
+    if NEWS_RISK_BRIDGE_PYTHON:
+        return NEWS_RISK_BRIDGE_PYTHON
+
+    venv_python = os.path.join(NEWS_RISK_BRIDGE_PATH, ".venv", "bin", "python")
+    if os.path.isfile(venv_python):
+        return venv_python
+    return "python"
 
 
 def extract_bridge_texts(output: str) -> list[str]:
