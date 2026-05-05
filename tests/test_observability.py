@@ -25,8 +25,12 @@ def test_metrics_payload_contains_prometheus_gauges():
     payload = metrics_payload(
         books={"BTC/USDT": ready_book},
         bootstrap_active={"BTC/USDT": False, "ETH/USDT": True},
+        signal_counts={("BUY", "BTC/USDT"): 3},
+        book_gap_counts={"BTC/USDT": 2},
     )
 
     assert 'mercury_brain_order_book_ready{symbol="BTC/USDT"} 1' in payload
     assert 'mercury_brain_order_book_seq{symbol="BTC/USDT"} 42' in payload
     assert 'mercury_brain_order_book_bootstrapping{symbol="ETH/USDT"} 1' in payload
+    assert 'mercury_signals_emitted_total{action="BUY",symbol="BTC/USDT"} 3' in payload
+    assert 'mercury_book_gap_total{symbol="BTC/USDT"} 2' in payload
