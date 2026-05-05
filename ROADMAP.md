@@ -13,11 +13,11 @@ This document tracks what it would take to turn Mercury from a working proof-of-
 | Moving average strategy | ✅ Working | Toy signal, no edge |
 | Risk manager | ✅ Working | Virtual balance only |
 | Exchange client (CCXT) | 🟡 Wired, commented out | Needs testnet validation |
-| L2 order book | 🟡 Batch adapter + snapshot bootstrap built, tested | Needs live validation |
-| Arrow IPC internal transport | ✅ Built, tested | Not yet used on live subjects |
+| L2 order book | ✅ Live on BTC/USDT with snapshot bootstrap | Snapshot refresh/recovery still needs hardening |
+| Arrow IPC internal transport | ✅ Built, tested | Binary path is ready; not yet the default live path |
 | Bytewax stream processor | ✅ Built | Not yet replacing brain/main.py in prod |
 | Backtester (Lance + Ray) | ✅ Built, tested | No historical data yet |
-| Plutarch archiver | ✅ Working | Accumulating data for future backtests |
+| Plutarch archiver | ✅ Working | ACK durability still needs tightening before long unattended runs |
 
 **Honest summary:** Mercury can receive a live Binance price feed, generate a moving average signal, pass it through a risk check, and route it to the exchange client — but the final execution step is commented out and the strategy has no demonstrated edge. The infrastructure is solid; the alpha is still a TODO.
 
@@ -40,7 +40,7 @@ wss://stream.binance.com:9443/ws/btcusdt@depth@100ms
 Nephtys should stay generic: classify the event as `depthUpdate`, preserve the exchange timestamp and sequence, and publish the raw payload. Mercury owns the Binance-specific adapter and applies each `[U, u]` update range as one atomic order-book mutation. Bootstrap now follows Binance's local-book procedure: buffer stream updates, fetch the REST depth snapshot, discard stale buffered updates, then apply the first buffered event where `U <= lastUpdateId + 1 <= u`.
 
 ### 1.3 Prometheus metrics
-Nephtys already has a Prometheus endpoint (`prometheus.yml` in its compose). Wire Mercury services to expose:
+The Brain now exposes a lightweight `/health` and `/metrics` HTTP surface for order-book readiness and sequence visibility. The next step is to round that out into service-wide Prometheus coverage:
 - `mercury_signals_emitted_total{action, symbol}`
 - `mercury_trades_executed_total{action, outcome}`
 - `mercury_book_gap_total{symbol}` — tracks sequence gap events

@@ -10,7 +10,7 @@
  
 Mercury is an autonomous cryptocurrency trading agent built using Python. It relies on a microservice architecture communicating exclusively over a NATS JetStream message broker. Mercury is designed to securely decouple the intelligence layer (which analyzes data and makes decisions) from the execution layer (which holds sensitive API keys and touches funds).
 
-Mercury is the sister project to [Nephtys](https://github.com/AndreaBozzo/Nephtys) (the data pipeline connector). Nephtys handles connecting to Binance webhooks, formatting data into a normalized stream, and publishing it to NATS. Mercury subscribes to those streams.
+Mercury is the sister project to [Nephtys](https://github.com/AndreaBozzo/Nephtys) (the data pipeline connector). Nephtys handles connecting to exchange streams, preserving the raw event payload plus sequence metadata, and publishing it to NATS. Mercury subscribes to those streams, bootstraps a local Binance order book from REST + `depthUpdate`, and turns that market state into typed trading signals.
 
 ## Architecture
 
@@ -19,6 +19,7 @@ Mercury is split into two completely isolated microservices:
 1. **The Brain (Intelligence Layer)**
    - Listens to tick-by-tick `MarketEvent` streams published to `nephtys.stream.crypto.*` wrappers via JetStream durable subscriptions.
    - Evaluates a configurable rolling state strategy (e.g., Simple Moving Average logic inside `brain/strategies/moving_average.py`).
+   - Maintains a local BTC/USDT L2 order book by buffering live `depthUpdate` events, fetching the Binance REST depth snapshot, and applying atomic `[U, u]` update batches once the snapshot is aligned.
    - Generates and publishes normalized `TradeSignal` objects back to NATS, enriched with `confidence_score` and `allocation_percentage`.
    - Has **NO** knowledge of any exchange API keys.
 
@@ -57,8 +58,9 @@ Mercury requires `uv` to manage its dependencies and a running instance of NATS 
    ```
 
 3. **Orchestration (Auto-provisioning Nephtys)**
-   Ensure Nephtys is running. You can run the startup script to automatically register the required streams via its REST API:
+   Ensure Nephtys is running. By default its admin API is on `http://localhost:3002/v1/streams`. If Nephtys is started with `NEPHTYS_ADMIN_TOKEN`, export the same value in Mercury before provisioning. Then register the required trade and depth streams via its REST API:
    ```bash
+   export NEPHTYS_ADMIN_TOKEN=your-local-admin-token
    uv run python -m scripts.provision_nephtys
    ```
 
@@ -67,6 +69,11 @@ Mercury requires `uv` to manage its dependencies and a running instance of NATS 
    ```bash
    uv run python -m brain.main
    ```
+
+   The Brain exposes a small HTTP surface for live verification:
+   - `GET /health` returns JSON with per-symbol book readiness, bootstrap state, and current sequence.
+   - `GET /metrics` returns Prometheus-style gauges for readiness, sequence, and bootstrap activity.
+   - Defaults: `http://127.0.0.1:9108/health` and `http://127.0.0.1:9108/metrics`
 
 5. **Run Services (Terminal 2)**
    Start the Executor:
@@ -84,3 +91,9 @@ docker-compose up -d
 ## Data Contracts (Schemas)
 
 All communication between Nephtys `->` Brain `->` Executor is strictly typed using Pydantic models defined in `core/schemas.py`.
+
+For market data, Mercury currently consumes:
+- Binance trade events for the basic signal path.
+- Binance `depthUpdate` batches for the local L2 book.
+
+Nephtys stays intentionally generic here: it classifies the event, preserves timestamp and sequence metadata, and forwards the raw payload. Mercury owns the Binance-specific depth adapter and snapshot bootstrap logic.

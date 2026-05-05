@@ -7,7 +7,8 @@ import requests
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("provision_nephtys")
 
-NEPHTYS_API_URL = os.getenv("NEPHTYS_API_URL", "http://localhost:3000/v1/streams")
+NEPHTYS_API_URL = os.getenv("NEPHTYS_API_URL", "http://localhost:3002/v1/streams")
+NEPHTYS_ADMIN_TOKEN = os.getenv("NEPHTYS_ADMIN_TOKEN", "")
 
 
 STREAMS = [
@@ -38,6 +39,10 @@ STREAMS = [
 
 def register_stream(payload: dict) -> bool:
     stream_id = payload["id"]
+    headers = {}
+    if NEPHTYS_ADMIN_TOKEN:
+        headers["Authorization"] = f"Bearer {NEPHTYS_ADMIN_TOKEN}"
+
     logger.info(
         "Attempting to register stream %r with Nephtys at %s...",
         stream_id,
@@ -47,7 +52,7 @@ def register_stream(payload: dict) -> bool:
     max_retries = 5
     for attempt in range(max_retries):
         try:
-            response = requests.post(NEPHTYS_API_URL, json=payload)
+            response = requests.post(NEPHTYS_API_URL, json=payload, headers=headers)
             if response.status_code in [200, 201]:
                 logger.info("Stream %r successfully registered.", stream_id)
                 return True
