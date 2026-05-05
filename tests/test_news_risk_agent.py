@@ -6,7 +6,18 @@ from executor.news_risk_agent import (
 from executor.risk_manager import default_risk_limits
 
 
-def test_extract_bridge_texts_parses_query_output():
+def test_extract_bridge_texts_parses_json_query_output():
+    output = (
+        '[{"text": "Exchange hack drains hot wallet", "source_id": "rss_news"}, '
+        '{"text": "ETF inflow accelerates", "source_id": "rss_news"}]'
+    )
+
+    texts = extract_bridge_texts(output)
+
+    assert texts == ["Exchange hack drains hot wallet", "ETF inflow accelerates"]
+
+
+def test_extract_bridge_texts_falls_back_to_legacy_human_output():
     output = (
         "Ricerca per: 'btc news'\n"
         "Testo: Exchange hack drains hot wallet\n"

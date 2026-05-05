@@ -96,6 +96,7 @@ def query_bridge_texts() -> list[str]:
         "--limit",
         str(NEWS_RISK_QUERY_LIMIT),
         "--all-namespaces",
+        "--json",
     ]
     completed = subprocess.run(
         command,
@@ -111,6 +112,25 @@ def query_bridge_texts() -> list[str]:
 
 
 def extract_bridge_texts(output: str) -> list[str]:
+    try:
+        parsed = json.loads(output)
+    except json.JSONDecodeError:
+        return _extract_legacy_bridge_texts(output)
+
+    if not isinstance(parsed, list):
+        return []
+
+    texts: list[str] = []
+    for row in parsed:
+        if not isinstance(row, dict):
+            continue
+        text = row.get("text")
+        if isinstance(text, str) and text:
+            texts.append(text)
+    return texts
+
+
+def _extract_legacy_bridge_texts(output: str) -> list[str]:
     texts: list[str] = []
     for line in output.splitlines():
         if line.startswith("Testo:"):
