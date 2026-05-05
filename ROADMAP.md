@@ -23,6 +23,50 @@ This document tracks what it would take to turn Mercury from a working proof-of-
 
 ---
 
+## Active plan: 2026 Q2 (May–Jul)
+
+The phases below remain the long-arc view. The next 2–3 months are scoped tightly around **getting to a small live-capital test safely**, on a ~5 hrs/week budget. Single theme per month, no parallel tracks, live flip is gated on a checklist (not a date).
+
+| Month | Theme | Headline deliverables |
+|---|---|---|
+| **M1 — Risk & Sizing Hardening** | Replace dead code, make sizing capital-aware | Delete `executor/news_risk_agent.py`. Add `brain/risk/volatility_modulator.py` (rolling stdev → multiplier in `[0,1]`, stale → trip HALT). Add `executor/sizing.py` (fixed-fractional, balance-aware, `MAX_NOTIONAL_EUR` cap, modulator-stale → qty=0 — never last-known-value). Strategies emit *intent* (side+confidence); executor sizes. |
+| **M2 — Durability & Observability** | Survive crashes, make humans hear breakage | `executor/state_store.py` (SQLite mirror of NATS KV exposure, exchange truth wins on disagreement). `core/alerts.py` (Telegram, 1 msg/min/category). Tests for `plutarch/archiver.py` and `brain/stream_processor.py` (currently 0% coverage). GitHub Actions CI (uv + ruff + pytest). |
+| **M3 — Drill, Cushion, Live Flip** | Prove safety net under stress, then flip the smallest possible amount | `scripts/drill_halt.py` (synthetic vol spike + broken depth + rejected order → HALT must trip, alerts must fire, sizer must go to 0). `scripts/halt.py` (first-class kill switch). 14-day testnet soak. Mainnet via env flag, `MAX_NOTIONAL_EUR=2`, single strategy = moving_average. Compare first 10 live fills to backtester predictions. |
+
+### Live Capital Flip Gate (must all be true before flipping)
+
+- 14 consecutive days of testnet uptime, no manual interventions
+- Telegram alerts verified for HALT, drift, depth desync, vol stall, order reject (5/5)
+- SQLite reconciliation tested via `kill -9` drill, 3/3 passes
+- Position sizer: unit tests + testnet integration test (cap, floor, modulator, balance)
+- `scripts/drill_halt.py` executed within last 7 days, HALT tripped as expected
+- CI green on `main`
+- Binance API key: spot-trade only, withdraw disabled, IP allowlisted
+- `MAX_NOTIONAL_EUR ≤ 2` for first 3 sessions
+- Manual kill-switch (`scripts/halt.py`) tested end-to-end
+- Wall-clock session cap enforced (auto-exit after N minutes regardless of P&L)
+- NTP time-sync verified on host
+- Runbook exists in `docs/runbook.md`
+
+### Nephtys-side work (must stay generic)
+
+Mercury depends on Nephtys but Nephtys serves more than one consumer profile, so any change must still make sense for non-crypto streams.
+
+**Committed this window:**
+- Optional WebSocket post-connect subscribe-message hook (`internal/connector/websocket.go`) — generic `on_connect_send` config field. Mercury uses it for combined Binance subscriptions; any future venue requiring auth/subscribe frames benefits.
+- `UpdatePipeline` persists to KV (`internal/server/manager.go` ~L151–184) — currently transient, lost on restart. Trivial fix, high value.
+
+**Deferred (rationale = stay generic):**
+- Backpressure / slow-consumer policy — needs a 2nd consumer profile to design without coupling.
+- Schema/version metadata in envelope — wait until at least one non-crypto stream lands so the envelope isn't crypto-shaped.
+- End-to-end latency histograms + tracing hooks — would impose OTel unilaterally; Mercury can measure ingress→signal in `brain/observability.py` for now.
+
+### Explicitly out of scope this window
+
+Arrow-as-default live path, Bytewax replacing `brain/main.py` in prod, multi-symbol, multi-venue arbitrage, ML signal generation, distributed brain. These remain in Phase 4 below.
+
+---
+
 ## Phase 1 — Make it real (4–6 weeks)
 
 Goal: first live paper trade executed end-to-end with no human intervention.
