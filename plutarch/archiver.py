@@ -1,14 +1,14 @@
-import lance
-import pyarrow as pa
-import pandas as pd
 import asyncio
-import os
 import json
 import logging
+import os
 from datetime import datetime
-from dotenv import load_dotenv
+
+import lance
 import nats
-from nats.js import JetStreamContext
+import pandas as pd
+import pyarrow as pa
+from dotenv import load_dotenv
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -22,30 +22,31 @@ DATA_DIR = "data/history"
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
+
 async def run_archiver():
     # Connect to NATS
     nc = await nats.connect(servers=[NATS_URL])
     js = nc.jetstream()
-    
+
     logger.info(f"Plutarch connected to NATS at {NATS_URL}. Listening to {STREAM_SUBJECT}...")
 
     # We use a durable consumer so if Plutarch crashes, it picks up exactly where it left off
     sub = await js.subscribe(STREAM_SUBJECT, durable="plutarch_archiver")
-    
+
     buffer = []
-    
+
     try:
         while True:
             # Fetch one message at a time (you can also use fetch() for batching)
             msg = await sub.next_msg(timeout=None)
             payload = json.loads(msg.data.decode())
-            
+
             # Add NATS metadata (like the exact subject it came from)
-            payload['_subject'] = msg.subject
-            payload['_archived_at'] = datetime.utcnow().isoformat()
-            
+            payload["_subject"] = msg.subject
+            payload["_archived_at"] = datetime.utcnow().isoformat()
+
             buffer.append(payload)
-            
+
             # Acknowledge the message so NATS knows we have it securely in memory
             await msg.ack()
 
@@ -61,16 +62,13 @@ async def run_archiver():
     finally:
         await nc.close()
 
+
 def flush_buffer_to_lance(buffer):
     if not buffer:
         return
-        
+
     df = pd.DataFrame(buffer)
     table = pa.Table.from_pandas(df)
-    
+
     # If the dataset exists, it appends. If not, it creates it.
-    lance.write_dataset(
-        table, 
-        "data/history/market_history.lance", 
-        mode="append"
-    )
+    lance.write_dataset(table, "data/history/market_history.lance", mode="append")

@@ -1,33 +1,45 @@
-import os
-import ccxt.async_support as ccxt
 import logging
-from core.schemas import TradeSignal
+import os
+
+import ccxt.async_support as ccxt
 from dotenv import load_dotenv
+
+from core.schemas import TradeSignal
 
 load_dotenv()
 logger = logging.getLogger("exchange_client")
 
+
 def get_exchange():
     api_key = os.getenv("BINANCE_API_KEY")
     secret_key = os.getenv("BINANCE_SECRET_KEY")
-    
-    exchange = ccxt.binance({
-        'apiKey': api_key,
-        'secret': secret_key,
-        'enableRateLimit': True,
-    })
-    
+
+    exchange = ccxt.binance(
+        {
+            "apiKey": api_key,
+            "secret": secret_key,
+            "enableRateLimit": True,
+        }
+    )
+
     # Always use testnet/sandbox mode initially
     exchange.set_sandbox_mode(True)
     return exchange
+
 
 async def execute_trade(signal: TradeSignal):
     """
     Executes a trade on the exchange using CCXT.
     """
     exchange = get_exchange()
-    logger.info(f"Executing {signal.action} {signal.quantity} {signal.symbol} on {exchange.id} (SANDBOX)...")
-    
+    logger.info(
+        "Executing %s %.6f %s on %s (SANDBOX)...",
+        signal.action,
+        signal.quantity,
+        signal.symbol,
+        exchange.id,
+    )
+
     # Example execution:
     try:
         # if signal.action == "BUY":
