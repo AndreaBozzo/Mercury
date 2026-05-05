@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -8,11 +9,14 @@ import ccxt.async_support as ccxt  # type: ignore[import-untyped]
 from dotenv import load_dotenv
 
 from core.schemas import TradeSignal
+from core.symbols import normalize_symbol, split_symbol
 
 load_dotenv()
 logger = logging.getLogger("exchange_client")
 ORDER_CONFIRM_ATTEMPTS = int(os.getenv("ORDER_CONFIRM_ATTEMPTS", "5"))
 ORDER_CONFIRM_DELAY_SECONDS = float(os.getenv("ORDER_CONFIRM_DELAY_SECONDS", "1.0"))
+TRADE_HISTORY_PAGE_LIMIT = int(os.getenv("TRADE_HISTORY_PAGE_LIMIT", "200"))
+TRADE_HISTORY_MAX_PAGES = int(os.getenv("TRADE_HISTORY_MAX_PAGES", "25"))
 
 
 @dataclass(frozen=True)
@@ -20,6 +24,32 @@ class ExecutionResult:
     status: Literal["dry_run", "filled"]
     order_id: str | None = None
     order: dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class SymbolPortfolioState:
+    symbol: str
+    quantity: float
+    mark_price: float
+    cost_basis: float
+    market_value: float
+    unrealized_pnl: float
+    last_trade_timestamp: int | None = None
+
+
+@dataclass(frozen=True)
+class PortfolioSnapshot:
+    symbols: dict[str, SymbolPortfolioState]
+    current_exposure: float
+    position_pnl: float
+
+
+@dataclass(frozen=True)
+class PersistedPositionState:
+    symbol: str
+    quantity: float
+    cost_basis: float
+    last_trade_timestamp: int | None = None
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -32,6 +62,11 @@ def _env_flag(name: str, default: bool) -> bool:
 
 def is_dry_run_enabled() -> bool:
     return _env_flag("DRY_RUN", default=True)
+
+
+def get_reconcile_symbols() -> list[str]:
+    raw = os.getenv("EXECUTOR_RECONCILE_SYMBOLS", "BTC/USDT")
+    return [normalize_symbol(symbol.strip()) for symbol in raw.split(",") if symbol.strip()]
 
 
 def get_exchange():
@@ -51,11 +86,44 @@ def get_exchange():
     return exchange
 
 
-async def fetch_open_orders() -> list[dict[str, Any]]:
+async def fetch_open_orders(symbol: str | None = None) -> list[dict[str, Any]]:
     exchange = get_exchange()
 
     try:
-        return await exchange.fetch_open_orders()
+        return await exchange.fetch_open_orders(normalize_symbol(symbol) if symbol else None)
+    finally:
+        await exchange.close()
+
+
+async def fetch_portfolio_snapshot(
+    symbols: list[str],
+    persisted_positions: Mapping[str, Mapping[str, Any]] | None = None,
+) -> PortfolioSnapshot:
+    exchange = get_exchange()
+
+    try:
+        balance = await exchange.fetch_balance()
+        symbol_states: dict[str, SymbolPortfolioState] = {}
+        current_exposure = 0.0
+        position_pnl = 0.0
+
+        for raw_symbol in symbols:
+            symbol = normalize_symbol(raw_symbol)
+            state = await _fetch_symbol_portfolio_state(
+                exchange,
+                balance,
+                symbol,
+                _coerce_persisted_position_state(persisted_positions, symbol),
+            )
+            symbol_states[symbol] = state
+            current_exposure += state.market_value
+            position_pnl += state.unrealized_pnl
+
+        return PortfolioSnapshot(
+            symbols=symbol_states,
+            current_exposure=current_exposure,
+            position_pnl=position_pnl,
+        )
     finally:
         await exchange.close()
 
@@ -143,3 +211,261 @@ async def execute_trade(signal: TradeSignal) -> ExecutionResult:
         raise
     finally:
         await exchange.close()
+
+
+async def _fetch_symbol_portfolio_state(
+    exchange,
+    balance: dict[str, Any],
+    symbol: str,
+    persisted_state: PersistedPositionState | None = None,
+) -> SymbolPortfolioState:
+    normalized = normalize_symbol(symbol)
+    base_asset, _quote_asset = split_symbol(normalized)
+    quantity = _balance_total(balance, base_asset)
+    ticker = await exchange.fetch_ticker(normalized)
+    mark_price = _ticker_price(ticker)
+    cost_basis, last_trade_timestamp = await _cost_basis_from_exchange_trades(
+        exchange,
+        normalized,
+        quantity,
+        persisted_state,
+    )
+    market_value = quantity * mark_price
+    unrealized_pnl = market_value - cost_basis if quantity > 0 else 0.0
+
+    return SymbolPortfolioState(
+        symbol=normalized,
+        quantity=quantity,
+        mark_price=mark_price,
+        cost_basis=cost_basis,
+        market_value=market_value,
+        unrealized_pnl=unrealized_pnl,
+        last_trade_timestamp=last_trade_timestamp,
+    )
+
+
+def _balance_total(balance: dict[str, Any], asset: str) -> float:
+    total_bucket = balance.get("total")
+    if isinstance(total_bucket, dict):
+        total = _as_float(total_bucket.get(asset))
+        if total is not None:
+            return max(0.0, total)
+
+    asset_bucket = balance.get(asset)
+    if isinstance(asset_bucket, dict):
+        total = _as_float(asset_bucket.get("total"))
+        if total is not None:
+            return max(0.0, total)
+        free = _as_float(asset_bucket.get("free")) or 0.0
+        used = _as_float(asset_bucket.get("used")) or 0.0
+        return max(0.0, free + used)
+
+    return 0.0
+
+
+def _ticker_price(ticker: dict[str, Any]) -> float:
+    return (
+        _as_float(ticker.get("last"))
+        or _as_float(ticker.get("close"))
+        or _as_float(ticker.get("bid"))
+        or _as_float(ticker.get("ask"))
+        or 0.0
+    )
+
+
+async def _cost_basis_from_exchange_trades(
+    exchange,
+    symbol: str,
+    balance_qty: float,
+    persisted_state: PersistedPositionState | None,
+) -> tuple[float, int | None]:
+    if balance_qty <= 0:
+        return 0.0, persisted_state.last_trade_timestamp if persisted_state else None
+
+    net_qty = persisted_state.quantity if persisted_state is not None else 0.0
+    cost_basis = persisted_state.cost_basis if persisted_state is not None else 0.0
+    trades = await _fetch_trade_history(
+        exchange,
+        symbol,
+        since_timestamp=persisted_state.last_trade_timestamp if persisted_state else None,
+        min_quantity=balance_qty,
+        initial_quantity=net_qty,
+    )
+    net_qty, cost_basis = _apply_trades_to_position(
+        trades,
+        initial_quantity=net_qty,
+        initial_cost_basis=cost_basis,
+    )
+    last_trade_timestamp = _latest_trade_timestamp(trades)
+    if last_trade_timestamp is None and persisted_state is not None:
+        last_trade_timestamp = persisted_state.last_trade_timestamp
+
+    if balance_qty <= 0 or net_qty <= 0:
+        return 0.0, last_trade_timestamp
+
+    if abs(balance_qty - net_qty) <= 1e-9:
+        return cost_basis, last_trade_timestamp
+
+    return cost_basis * max(0.0, min(1.0, balance_qty / net_qty)), last_trade_timestamp
+
+
+async def _fetch_trade_history(
+    exchange,
+    symbol: str,
+    since_timestamp: int | None,
+    min_quantity: float,
+    initial_quantity: float,
+) -> list[dict[str, Any]]:
+    all_trades: list[dict[str, Any]] = []
+
+    if since_timestamp is not None:
+        trades = await exchange.fetch_my_trades(
+            symbol,
+            since=since_timestamp + 1,
+            limit=TRADE_HISTORY_PAGE_LIMIT,
+        )
+        return _dedupe_sorted_trades(trades)
+
+    cursor_since = 0
+    reconstructed_quantity = initial_quantity
+
+    for _page in range(TRADE_HISTORY_MAX_PAGES):
+        trades = await exchange.fetch_my_trades(
+            symbol,
+            since=cursor_since,
+            limit=TRADE_HISTORY_PAGE_LIMIT,
+        )
+        if not trades:
+            break
+
+        page = _dedupe_sorted_trades(trades)
+        all_trades = _merge_trade_history(all_trades, page)
+        reconstructed_quantity, _ = _apply_trades_to_position(all_trades)
+        if reconstructed_quantity >= max(min_quantity - 1e-9, 0.0):
+            break
+
+        newest_timestamp = max(int(trade.get("timestamp") or 0) for trade in page)
+        if newest_timestamp < cursor_since:
+            break
+        cursor_since = newest_timestamp + 1
+
+    return all_trades
+
+
+def _coerce_persisted_position_state(
+    persisted_positions: Mapping[str, Mapping[str, Any]] | None,
+    symbol: str,
+) -> PersistedPositionState | None:
+    if persisted_positions is None:
+        return None
+
+    raw = persisted_positions.get(symbol)
+    if raw is None:
+        return None
+
+    quantity = _as_float(raw.get("quantity"))
+    cost_basis = _as_float(raw.get("cost_basis"))
+    if quantity is None or cost_basis is None:
+        return None
+
+    raw_timestamp = raw.get("last_trade_timestamp")
+    timestamp = int(raw_timestamp) if raw_timestamp is not None else None
+    return PersistedPositionState(
+        symbol=symbol,
+        quantity=max(0.0, quantity),
+        cost_basis=max(0.0, cost_basis),
+        last_trade_timestamp=timestamp,
+    )
+
+
+def _dedupe_sorted_trades(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    unique: dict[str, dict[str, Any]] = {}
+    fallback_index = 0
+
+    for trade in trades:
+        trade_id = trade.get("id")
+        if trade_id is None:
+            trade_id = f"fallback-{fallback_index}"
+            fallback_index += 1
+        unique[str(trade_id)] = trade
+
+    return sorted(unique.values(), key=lambda item: int(item.get("timestamp") or 0))
+
+
+def _merge_trade_history(
+    older: list[dict[str, Any]],
+    newer: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: dict[str, dict[str, Any]] = {}
+
+    for trade in older + newer:
+        trade_id = trade.get("id")
+        if trade_id is None:
+            trade_id = f"fallback-{int(trade.get('timestamp') or 0)}-{len(merged)}"
+        merged[str(trade_id)] = trade
+
+    return sorted(merged.values(), key=lambda item: int(item.get("timestamp") or 0))
+
+
+def _latest_trade_timestamp(trades: list[dict[str, Any]]) -> int | None:
+    timestamps = [
+        int(trade.get("timestamp") or 0)
+        for trade in trades
+        if trade.get("timestamp") is not None
+    ]
+    if not timestamps:
+        return None
+    return max(timestamps)
+
+
+def build_persisted_position_state(
+    symbol_state: SymbolPortfolioState,
+) -> dict[str, Any]:
+    return {
+        "symbol": symbol_state.symbol,
+        "quantity": symbol_state.quantity,
+        "cost_basis": symbol_state.cost_basis,
+        "last_trade_timestamp": symbol_state.last_trade_timestamp,
+    }
+
+
+def _cost_basis_from_trades(trades: list[dict[str, Any]], balance_qty: float) -> float:
+    net_qty, cost_basis = _apply_trades_to_position(trades)
+
+    if balance_qty <= 0 or net_qty <= 0:
+        return 0.0
+
+    if abs(balance_qty - net_qty) <= 1e-9:
+        return cost_basis
+
+    return cost_basis * max(0.0, min(1.0, balance_qty / net_qty))
+
+
+def _apply_trades_to_position(
+    trades: list[dict[str, Any]],
+    initial_quantity: float = 0.0,
+    initial_cost_basis: float = 0.0,
+) -> tuple[float, float]:
+    net_qty = max(0.0, initial_quantity)
+    cost_basis = max(0.0, initial_cost_basis)
+
+    for trade in sorted(trades, key=lambda item: int(item.get("timestamp") or 0)):
+        side = str(trade.get("side") or "").strip().lower()
+        amount = _as_float(trade.get("amount")) or 0.0
+        trade_cost = _as_float(trade.get("cost"))
+        price = _as_float(trade.get("price")) or 0.0
+
+        if amount <= 0:
+            continue
+
+        cost = trade_cost if trade_cost is not None else amount * price
+        if side == "buy":
+            net_qty += amount
+            cost_basis += cost
+        elif side == "sell" and net_qty > 0:
+            reduce_qty = min(amount, net_qty)
+            avg_cost = cost_basis / net_qty if net_qty > 0 else 0.0
+            cost_basis = max(0.0, cost_basis - reduce_qty * avg_cost)
+            net_qty = max(0.0, net_qty - reduce_qty)
+
+    return net_qty, cost_basis

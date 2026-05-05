@@ -8,7 +8,9 @@ from executor.risk_manager import (
     HALT_KEY,
     check_risk,
     load_halt_flag,
+    load_position_states,
     record_trade_execution,
+    save_position_states,
 )
 
 
@@ -102,3 +104,32 @@ async def test_record_trade_execution_reduces_exposure_for_sell_orders():
 
     assert new_exposure == 0.0
     assert float(kv.store[EXPOSURE_KEY].decode()) == 0.0
+
+
+@pytest.mark.asyncio
+async def test_save_and_load_position_states_round_trip():
+    kv = FakeKV()
+    js = FakeJetStream(kv)
+
+    await save_position_states(
+        js,
+        {
+            "BTC/USDT": {
+                "symbol": "BTC/USDT",
+                "quantity": 0.5,
+                "cost_basis": 50.0,
+                "last_trade_timestamp": 3,
+            }
+        },
+    )
+
+    states = await load_position_states(js, ["BTC/USDT", "ETH/USDT"])
+
+    assert states == {
+        "BTC/USDT": {
+            "symbol": "BTC/USDT",
+            "quantity": 0.5,
+            "cost_basis": 50.0,
+            "last_trade_timestamp": 3,
+        }
+    }

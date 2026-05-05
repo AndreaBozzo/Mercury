@@ -12,14 +12,14 @@ This document tracks what it would take to turn Mercury from a working proof-of-
 | NATS JetStream pub/sub | ✅ Working | — |
 | Moving average strategy | ✅ Working | Toy signal, no edge |
 | Risk manager | ✅ Working | Virtual balance only |
-| Exchange client (CCXT) | 🟡 Wired, commented out | Needs testnet validation |
+| Exchange client (CCXT) | ✅ Testnet-validated | Spot testnet only; no live venue diversification |
 | L2 order book | ✅ Live on BTC/USDT with snapshot bootstrap | Snapshot refresh/recovery still needs hardening |
 | Arrow IPC internal transport | ✅ Built, tested | Binary path is ready; not yet the default live path |
 | Bytewax stream processor | ✅ Built | Not yet replacing brain/main.py in prod |
 | Backtester (Lance + Ray) | ✅ Built, tested | No historical data yet |
 | Plutarch archiver | ✅ Working | ACK durability still needs tightening before long unattended runs |
 
-**Honest summary:** Mercury can receive a live Binance price feed, generate a moving average signal, pass it through a risk check, and route it to the exchange client — but the final execution step is commented out and the strategy has no demonstrated edge. The infrastructure is solid; the alpha is still a TODO.
+**Honest summary:** Mercury can now receive a live Binance price feed, generate a moving average signal, bootstrap and maintain a BTC/USDT L2 book, pass signals through a circuit-breaker-aware risk check, and execute confirmed paper trades on Binance Spot Testnet with startup reconciliation and live executor metrics. The infrastructure path works end-to-end; the strategy still has no demonstrated edge.
 
 ---
 
@@ -28,9 +28,9 @@ This document tracks what it would take to turn Mercury from a working proof-of-
 Goal: first live paper trade executed end-to-end with no human intervention.
 
 ### 1.1 Uncomment and validate exchange execution
-- Enable `create_market_buy_order` / `create_market_sell_order` behind a `DRY_RUN` flag
-- Verify testnet round-trips: order placed → fill confirmed → exposure updated in NATS KV
-- Add order-state reconciliation: check open orders on startup to recover from crashes mid-trade
+- ✅ `create_market_buy_order` / `create_market_sell_order` are enabled behind a `DRY_RUN` flag
+- ✅ Testnet round-trips verified: order placed → fill confirmed → exposure updated in NATS KV
+- ✅ Startup reconciliation checks configured symbols for open exchange orders before the executor begins consuming signals
 
 ### 1.2 Add L2 market-data support
 The order book module now applies raw Binance depth batches atomically:
@@ -40,14 +40,16 @@ wss://stream.binance.com:9443/ws/btcusdt@depth@100ms
 Nephtys should stay generic: classify the event as `depthUpdate`, preserve the exchange timestamp and sequence, and publish the raw payload. Mercury owns the Binance-specific adapter and applies each `[U, u]` update range as one atomic order-book mutation. Bootstrap now follows Binance's local-book procedure: buffer stream updates, fetch the REST depth snapshot, discard stale buffered updates, then apply the first buffered event where `U <= lastUpdateId + 1 <= u`.
 
 ### 1.3 Prometheus metrics
-The Brain now exposes a lightweight `/health` and `/metrics` HTTP surface for order-book readiness and sequence visibility. The next step is to round that out into service-wide Prometheus coverage:
-- `mercury_signals_emitted_total{action, symbol}`
-- `mercury_trades_executed_total{action, outcome}`
-- `mercury_book_gap_total{symbol}` — tracks sequence gap events
-- `mercury_position_pnl_dollars` — live unrealised P&L gauge
+The Brain and Executor now expose lightweight `/health` and `/metrics` HTTP surfaces.
+- ✅ `mercury_signals_emitted_total{action, symbol}`
+- ✅ `mercury_trades_executed_total{action, outcome}`
+- ✅ `mercury_book_gap_total{symbol}` — tracks sequence gap events
+- ✅ `mercury_position_pnl_dollars` — derived from exchange balances, fills, and mark prices
+- ✅ `mercury_executor_current_exposure_dollars`
+- ✅ Symbol labels are normalized to one internal form (`BTC/USDT`) across live trade, L2, and execution paths
 
 ### 1.4 Circuit breaker
-Add a `HALT` flag to NATS KV. Any service can set it (e.g. on unexpected execution error or drawdown limit breach). The executor checks it before every trade. Reset requires a manual key deletion.
+✅ A `HALT` flag now lives in NATS KV. Any service can set it (e.g. on unexpected execution error or drawdown limit breach). The executor checks it before every trade. Reset still requires a manual key deletion.
 
 ---
 

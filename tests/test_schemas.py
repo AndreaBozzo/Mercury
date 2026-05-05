@@ -71,6 +71,14 @@ class TestTradeSignal:
         with pytest.raises(ValidationError):
             TradeSignal(**_signal(quantity=0))
 
+    def test_symbol_is_normalized(self):
+        sig = TradeSignal(**_signal(symbol="BTCUSDT"))
+        assert sig.symbol == "BTC/USDT"
+
+    def test_invalid_symbol_is_rejected(self):
+        with pytest.raises(ValidationError):
+            TradeSignal(**_signal(symbol=""))
+
 
 class TestOrderBookSnapshot:
     def test_parses_bid_ask_lists(self):
@@ -150,3 +158,7 @@ class TestL2Features:
             best_ask_qty=0.8,
         )
         assert feat.imbalance == 0.3
+
+    def test_invalid_symbol_is_rejected(self):
+        with pytest.raises(ValidationError):
+            L2Features(symbol="BTC/", timestamp=0)

@@ -17,8 +17,10 @@ from __future__ import annotations
 import statistics
 from collections import deque
 from datetime import datetime
+from typing import Literal
 
 from core.schemas import MarketEvent, TradeSignal
+from core.symbols import normalize_symbol
 
 
 class MovingAverageStrategy:
@@ -49,7 +51,10 @@ class MovingAverageStrategy:
 
     def evaluate(self, event: MarketEvent) -> TradeSignal | None:
         payload = event.payload
-        symbol = payload.get("symbol", "BTC/USDT")
+        try:
+            symbol = normalize_symbol(payload.get("symbol"))
+        except ValueError:
+            return None
         price = float(payload.get("price", 0.0))
 
         if price <= 0:
@@ -61,6 +66,7 @@ class MovingAverageStrategy:
 
         ma = statistics.mean(self._prices)
 
+        action: Literal["BUY", "SELL"]
         if price < ma * self.buy_threshold:
             action = "BUY"
         elif price > ma * self.sell_threshold:

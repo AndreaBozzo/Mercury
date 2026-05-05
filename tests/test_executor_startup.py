@@ -7,7 +7,7 @@ from executor.main import reconcile_startup_state
 async def test_reconcile_startup_state_skips_exchange_checks_in_dry_run(monkeypatch):
     called = False
 
-    async def fake_fetch_open_orders():
+    async def fake_fetch_open_orders(_symbol):
         nonlocal called
         called = True
         return []
@@ -22,28 +22,37 @@ async def test_reconcile_startup_state_skips_exchange_checks_in_dry_run(monkeypa
 
 @pytest.mark.asyncio
 async def test_reconcile_startup_state_accepts_clean_exchange_state(monkeypatch):
-    async def fake_fetch_open_orders():
+    fetched_symbols: list[str] = []
+
+    async def fake_fetch_open_orders(symbol):
+        fetched_symbols.append(symbol)
         return []
 
     async def fake_load_exposure(_js):
         return 250.0
 
     monkeypatch.setattr("executor.main.is_dry_run_enabled", lambda: False)
+    monkeypatch.setattr("executor.main.get_reconcile_symbols", lambda: ["BTC/USDT", "ETH/USDT"])
     monkeypatch.setattr("executor.main.fetch_open_orders", fake_fetch_open_orders)
     monkeypatch.setattr("executor.main.load_exposure", fake_load_exposure)
 
     await reconcile_startup_state(js=object())
 
+    assert fetched_symbols == ["BTC/USDT", "ETH/USDT"]
+
 
 @pytest.mark.asyncio
 async def test_reconcile_startup_state_fails_closed_when_open_orders_exist(monkeypatch):
-    async def fake_fetch_open_orders():
-        return [{"id": "open-1"}]
+    async def fake_fetch_open_orders(symbol):
+        if symbol == "BTC/USDT":
+            return [{"id": "open-1"}]
+        return []
 
     async def fake_load_exposure(_js):
         return 250.0
 
     monkeypatch.setattr("executor.main.is_dry_run_enabled", lambda: False)
+    monkeypatch.setattr("executor.main.get_reconcile_symbols", lambda: ["BTC/USDT", "ETH/USDT"])
     monkeypatch.setattr("executor.main.fetch_open_orders", fake_fetch_open_orders)
     monkeypatch.setattr("executor.main.load_exposure", fake_load_exposure)
 

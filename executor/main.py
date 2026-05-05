@@ -1,13 +1,28 @@
 import asyncio
+import contextlib
 import json
 import logging
 import os
 
 from core.nats_utils import get_jetstream
 from core.schemas import TradeSignal
-from executor.exchange_client import execute_trade, fetch_open_orders, is_dry_run_enabled
+from executor.exchange_client import (
+    build_persisted_position_state,
+    execute_trade,
+    fetch_open_orders,
+    fetch_portfolio_snapshot,
+    get_reconcile_symbols,
+    is_dry_run_enabled,
+)
 from executor.observability import health_payload, json_response, metrics_payload
-from executor.risk_manager import check_risk, load_exposure, record_trade_execution
+from executor.risk_manager import (
+    check_risk,
+    load_exposure,
+    load_position_states,
+    record_trade_execution,
+    save_exposure,
+    save_position_states,
+)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("executor")
@@ -16,6 +31,7 @@ _current_exposure = 0.0
 _position_pnl = 0.0
 _EXECUTOR_HTTP_HOST = os.getenv("EXECUTOR_HTTP_HOST", "127.0.0.1")
 _EXECUTOR_HTTP_PORT = int(os.getenv("EXECUTOR_HTTP_PORT", "9109"))
+_EXECUTOR_ACCOUNT_REFRESH_SECONDS = float(os.getenv("EXECUTOR_ACCOUNT_REFRESH_SECONDS", "15"))
 
 
 def _record_trade_outcome(action: str, outcome: str) -> None:
@@ -28,8 +44,47 @@ def _set_current_exposure(value: float) -> None:
     _current_exposure = value
 
 
+def _set_position_pnl(value: float) -> None:
+    global _position_pnl
+    _position_pnl = value
+
+
 async def _refresh_current_exposure(js) -> None:
     _set_current_exposure(await load_exposure(js))
+
+
+async def _refresh_runtime_state(js) -> None:
+    if is_dry_run_enabled():
+        await _refresh_current_exposure(js)
+        _set_position_pnl(0.0)
+        return
+
+    symbols = get_reconcile_symbols()
+    persisted_positions = await load_position_states(js, symbols)
+    snapshot = await fetch_portfolio_snapshot(symbols, persisted_positions=persisted_positions)
+    await save_position_states(
+        js,
+        {
+            symbol: build_persisted_position_state(state)
+            for symbol, state in snapshot.symbols.items()
+        },
+    )
+    await save_exposure(js, snapshot.current_exposure)
+    _set_current_exposure(snapshot.current_exposure)
+    _set_position_pnl(snapshot.position_pnl)
+
+
+async def _refresh_runtime_state_safe(js) -> None:
+    try:
+        await _refresh_runtime_state(js)
+    except Exception:
+        logger.exception("Failed to refresh executor portfolio state from exchange")
+
+
+async def _portfolio_refresh_loop(js) -> None:
+    while True:
+        await asyncio.sleep(_EXECUTOR_ACCOUNT_REFRESH_SECONDS)
+        await _refresh_runtime_state_safe(js)
 
 
 async def _serve_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
@@ -106,7 +161,10 @@ async def reconcile_startup_state(js):
         return
 
     current_exposure = await load_exposure(js)
-    open_orders = await fetch_open_orders()
+    reconcile_symbols = get_reconcile_symbols()
+    open_orders: list[dict] = []
+    for symbol in reconcile_symbols:
+        open_orders.extend(await fetch_open_orders(symbol))
 
     if open_orders:
         logger.error(
@@ -118,7 +176,9 @@ async def reconcile_startup_state(js):
         raise RuntimeError("Open exchange orders found during startup reconciliation")
 
     logger.info(
-        "Startup reconciliation succeeded: no open exchange orders, current exposure %.2f.",
+        "Startup reconciliation succeeded: no open exchange orders across %d symbols, "
+        "current exposure %.2f.",
+        len(reconcile_symbols),
         current_exposure,
     )
 
@@ -139,7 +199,8 @@ async def get_message_handler(js):
             if await check_risk(signal, js):
                 result = await execute_trade(signal)
                 if result.status == "filled":
-                    _set_current_exposure(await record_trade_execution(signal, js))
+                    await record_trade_execution(signal, js)
+                    await _refresh_runtime_state_safe(js)
                 else:
                     await _refresh_current_exposure(js)
                 _record_trade_outcome(signal.action, result.status)
@@ -150,7 +211,7 @@ async def get_message_handler(js):
                 # Acknowledge only after successful execution + NATS KV update
                 await msg.ack()
             else:
-                await _refresh_current_exposure(js)
+                await _refresh_runtime_state_safe(js)
                 _record_trade_outcome(signal.action, "rejected")
                 logger.warning("Trade rejected by risk manager.")
                 # Ack rejected signals to avoid infinite retry
@@ -171,7 +232,7 @@ async def main():
 
     await ensure_wallet_bucket(js)
     await reconcile_startup_state(js)
-    await _refresh_current_exposure(js)
+    await _refresh_runtime_state_safe(js)
 
     try:
         await js.add_stream(name="trade_signals", subjects=["trade.*"])
@@ -188,8 +249,15 @@ async def main():
     handler = await get_message_handler(js)
     await js.subscribe("trade.signals", durable="executor_service", cb=handler)
 
-    async with http_server:
-        await http_server.serve_forever()
+    refresh_task = asyncio.create_task(_portfolio_refresh_loop(js))
+
+    try:
+        async with http_server:
+            await http_server.serve_forever()
+    finally:
+        refresh_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await refresh_task
 
 
 if __name__ == "__main__":

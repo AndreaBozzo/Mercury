@@ -1,7 +1,9 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from core.symbols import normalize_symbol
 
 # ---------------------------------------------------------------------------
 # L1 — current Nephtys output (JSON StreamEvent envelope)
@@ -28,6 +30,11 @@ class TradeSignal(BaseModel):
     allocation_percentage: float = Field(default=0.0, ge=0.0, le=100.0)
     timestamp: datetime
 
+    @field_validator("symbol")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        return normalize_symbol(value)
+
 
 # ---------------------------------------------------------------------------
 # L2 — order book events (expected when Nephtys adds L2 feed support)
@@ -51,6 +58,11 @@ class OrderBookSnapshot(BaseModel):
     bids: list[list[float]]  # [[price, qty], ...]  descending
     asks: list[list[float]]  # [[price, qty], ...]  ascending
 
+    @field_validator("symbol")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        return normalize_symbol(value)
+
 
 class OrderBookDelta(BaseModel):
     """Incremental L2 update.  Expected MarketEvent.type == 'l2_delta'.
@@ -63,6 +75,11 @@ class OrderBookDelta(BaseModel):
     side: Literal["bid", "ask"]
     price: float = Field(gt=0)
     qty: float = Field(ge=0)
+
+    @field_validator("symbol")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        return normalize_symbol(value)
 
 
 class L2Features(BaseModel):
@@ -77,3 +94,8 @@ class L2Features(BaseModel):
     best_bid_qty: float | None = None
     best_ask_price: float | None = None
     best_ask_qty: float | None = None
+
+    @field_validator("symbol")
+    @classmethod
+    def _normalize_symbol(cls, value: str) -> str:
+        return normalize_symbol(value)

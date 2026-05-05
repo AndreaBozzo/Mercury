@@ -117,6 +117,18 @@ class TestMovingAverageStrategy:
         sig = s.evaluate(_ev(99.8))
         assert sig is not None and sig.action == "BUY"
 
+    def test_normalizes_binance_compact_symbol_in_emitted_signal(self):
+        s = MovingAverageStrategy(window=5, buy_threshold=0.99)
+        _fill(s, 100.0, 5)
+        sig = s.evaluate(_ev(97.0, symbol="BTCUSDT"))
+        assert sig is not None
+        assert sig.symbol == "BTC/USDT"
+
+    def test_invalid_symbol_returns_none(self):
+        s = MovingAverageStrategy(window=5, buy_threshold=0.99)
+        _fill(s, 100.0, 5)
+        assert s.evaluate(_ev(97.0, symbol="")) is None
+
 
 class TestBackwardCompatShim:
     def test_shim_is_callable(self):

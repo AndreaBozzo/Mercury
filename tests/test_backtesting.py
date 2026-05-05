@@ -134,7 +134,7 @@ class TestBacktestEngine:
                 if self._step == 1:
                     return TradeSignal(
                         strategy_id="forced",
-                        symbol="X",
+                        symbol="X/USDT",
                         action="BUY",
                         order_type="MARKET",
                         quantity=1.0,
@@ -146,7 +146,7 @@ class TestBacktestEngine:
                 if self._step == 2:
                     return TradeSignal(
                         strategy_id="forced",
-                        symbol="X",
+                        symbol="X/USDT",
                         action="SELL",
                         order_type="MARKET",
                         quantity=1.0,

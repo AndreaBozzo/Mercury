@@ -20,14 +20,16 @@ Mercury is split into two completely isolated microservices:
    - Listens to tick-by-tick `MarketEvent` streams published to `nephtys.stream.crypto.*` wrappers via JetStream durable subscriptions.
    - Evaluates a configurable rolling state strategy (e.g., Simple Moving Average logic inside `brain/strategies/moving_average.py`).
    - Maintains a local BTC/USDT L2 order book by buffering live `depthUpdate` events, fetching the Binance REST depth snapshot, and applying atomic `[U, u]` update batches once the snapshot is aligned.
-   - Generates and publishes normalized `TradeSignal` objects back to NATS, enriched with `confidence_score` and `allocation_percentage`.
+   - Normalizes live Binance compact symbols such as `BTCUSDT` into one internal form (`BTC/USDT`) before emitting `TradeSignal` objects, so book state, metrics, and execution all use the same symbol labels.
+   - Publishes normalized `TradeSignal` objects back to NATS, enriched with `confidence_score` and `allocation_percentage`.
    - Has **NO** knowledge of any exchange API keys.
 
 2. **The Executor (Risk & Execution Layer)**
    - Subscribes to NATS `trade.signals` via a durable consumer (so it never misses a trade, even if it goes offline temporarily).
    - Passes every incoming signal through the `risk_manager.py` risk vault.
-   - Uses persistent state managed natively inside a NATS Key-Value bucket (`mercury_wallet_state`) to strictly enforce maximum exposure vs a virtual balance (to avoid the "Amnesia" bug if restarted).
-   - If a signal passes risk checks, executes the trade asynchronously against the Binance Sandbox via `ccxt.async_support`.
+   - Uses persistent state managed natively inside a NATS Key-Value bucket (`mercury_wallet_state`) to enforce maximum exposure, store the `HALT` circuit-breaker flag, and retain exposure state across executor restarts.
+   - If a signal passes risk checks, executes the trade asynchronously against the Binance Sandbox via `ccxt.async_support`, confirms the order reached a filled/closed state, and only then records exposure.
+   - Reconciles configured symbols on startup and refreshes account-derived exposure plus unrealized P&L from exchange balances, fills, and mark prices.
 
 ## Technologies Used
 
@@ -55,7 +57,14 @@ Mercury requires `uv` to manage its dependencies and a running instance of NATS 
    BINANCE_API_KEY=your_sandbox_api_key
    BINANCE_SECRET_KEY=your_sandbox_secret_key
    NATS_URL=nats://localhost:4222
+   DRY_RUN=true
+   EXECUTOR_RECONCILE_SYMBOLS=BTC/USDT
+   EXECUTOR_ACCOUNT_REFRESH_SECONDS=15
    ```
+
+   Notes:
+   - Keep `DRY_RUN=true` until you are ready to place Binance Spot Testnet orders.
+   - `EXECUTOR_RECONCILE_SYMBOLS` accepts either `BTCUSDT` or `BTC/USDT`; Mercury normalizes both to `BTC/USDT` internally.
 
 3. **Orchestration (Auto-provisioning Nephtys)**
    Ensure Nephtys is running. By default its admin API is on `http://localhost:3002/v1/streams`. If Nephtys is started with `NEPHTYS_ADMIN_TOKEN`, export the same value in Mercury before provisioning. Then register the required trade and depth streams via its REST API:
@@ -81,6 +90,13 @@ Mercury requires `uv` to manage its dependencies and a running instance of NATS 
    uv run python -m executor.main
    ```
 
+   The Executor also exposes a small HTTP surface:
+   - `GET /health` returns JSON with `current_exposure` and `position_pnl`.
+   - `GET /metrics` returns Prometheus-style trade outcome counters plus:
+     - `mercury_executor_current_exposure_dollars`
+     - `mercury_position_pnl_dollars`
+   - Defaults: `http://127.0.0.1:9109/health` and `http://127.0.0.1:9109/metrics`
+
 ### Docker
 Alternatively, you can run the entire cluster using Docker Compose:
 ```bash
@@ -97,3 +113,5 @@ For market data, Mercury currently consumes:
 - Binance `depthUpdate` batches for the local L2 book.
 
 Nephtys stays intentionally generic here: it classifies the event, preserves timestamp and sequence metadata, and forwards the raw payload. Mercury owns the Binance-specific depth adapter and snapshot bootstrap logic.
+
+Across those paths, Mercury normalizes symbols at the schema boundary. A live trade event carrying `BTCUSDT` and an L2 book event carrying `BTC/USDT` will converge to the same internal symbol, which keeps metrics labels, book state, and execution reconciliation aligned.
