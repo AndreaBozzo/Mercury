@@ -30,6 +30,10 @@ def test_extract_bridge_texts_falls_back_to_legacy_human_output():
     assert texts == ["Exchange hack drains hot wallet", "ETF inflow accelerates"]
 
 
+def test_extract_bridge_texts_ignores_non_list_json():
+    assert extract_bridge_texts('{"text": "not a list"}') == []
+
+
 def test_analyze_news_with_heuristic_scores_negative_news_lower():
     analysis = analyze_news_with_heuristic(
         [

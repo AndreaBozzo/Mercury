@@ -25,6 +25,9 @@ NEWS_RISK_QUERY = os.getenv(
     "bitcoin exchange hack insolvency liquidation fraud sanctions regulation outage",
 )
 NEWS_RISK_QUERY_LIMIT = int(os.getenv("NEWS_RISK_QUERY_LIMIT", "8"))
+NEWS_RISK_QUERY_SOURCE = os.getenv("NEWS_RISK_QUERY_SOURCE", "")
+NEWS_RISK_QUERY_EVENT_TYPE = os.getenv("NEWS_RISK_QUERY_EVENT_TYPE", "")
+NEWS_RISK_QUERY_MAX_AGE_SECONDS = int(os.getenv("NEWS_RISK_QUERY_MAX_AGE_SECONDS", "86400"))
 NEWS_RISK_ANALYZER = os.getenv("NEWS_RISK_ANALYZER", "heuristic").strip().lower()
 NEWS_RISK_LLM_API_KEY = os.getenv("NEWS_RISK_LLM_API_KEY")
 NEWS_RISK_LLM_BASE_URL = os.getenv("NEWS_RISK_LLM_BASE_URL", "https://api.openai.com/v1")
@@ -98,6 +101,12 @@ def query_bridge_texts() -> list[str]:
         "--all-namespaces",
         "--json",
     ]
+    if NEWS_RISK_QUERY_SOURCE:
+        command.extend(["--source", NEWS_RISK_QUERY_SOURCE])
+    if NEWS_RISK_QUERY_EVENT_TYPE:
+        command.extend(["--event-type", NEWS_RISK_QUERY_EVENT_TYPE])
+    if NEWS_RISK_QUERY_MAX_AGE_SECONDS >= 0:
+        command.extend(["--max-age-seconds", str(NEWS_RISK_QUERY_MAX_AGE_SECONDS)])
     completed = subprocess.run(
         command,
         cwd=NEWS_RISK_BRIDGE_PATH,
