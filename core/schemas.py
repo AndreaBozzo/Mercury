@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 # ---------------------------------------------------------------------------
 # L1 — current Nephtys output (JSON StreamEvent envelope)
@@ -13,32 +13,31 @@ class MarketEvent(BaseModel):
     type: str
     timestamp: int
     payload: dict[str, Any]
+    seq: int | None = Field(default=None, ge=0)
+    content_type: str | None = None
 
 
 class TradeSignal(BaseModel):
     strategy_id: str
     symbol: str
-    action: str  # "BUY" | "SELL"
-    order_type: str  # "MARKET" | "LIMIT"
-    quantity: float
-    price: float | None = None
-    confidence_score: float = 1.0
-    allocation_percentage: float = 0.0
+    action: Literal["BUY", "SELL"]
+    order_type: Literal["MARKET", "LIMIT"]
+    quantity: float = Field(gt=0)
+    price: float | None = Field(default=None, gt=0)
+    confidence_score: float = Field(default=1.0, ge=0.0, le=1.0)
+    allocation_percentage: float = Field(default=0.0, ge=0.0, le=100.0)
     timestamp: datetime
 
 
 # ---------------------------------------------------------------------------
 # L2 — order book events (expected when Nephtys adds L2 feed support)
 #
-# Nephtys improvement notes (peer review, next month):
-#   1. StreamEvent lacks a sequence number at the envelope level; Mercury must
-#      fall back to NATS JetStream msg.metadata.sequence as the authoritative
-#      sequencer.  Adding `seq: int64` to StreamEvent would be cleaner.
-#   2. No "l2_snapshot" / "l2_delta" event types are defined in domain/event.go.
-#      Nephtys would need to add a WebSocket L2 connector (e.g. Binance depth
-#      stream) and emit these types for the order book to work in live trading.
-#   3. Serialisation is JSON-only; switching to Arrow IPC for binary streams
-#      would enable true zero-copy deserialization at Mercury's ingestion edge.
+# Integration notes:
+#   - Live L2 deltas need a per-symbol exchange sequence. Broker sequence can
+#     be used only when a subject contains one ordered book stream and no
+#     unrelated events.
+#   - Binary internal transport stays Mercury-local; upstream connectors may
+#     continue to publish JSON at the ingestion boundary.
 # ---------------------------------------------------------------------------
 
 
@@ -47,8 +46,8 @@ class OrderBookSnapshot(BaseModel):
 
     source: str
     symbol: str
-    seq: int
-    timestamp: int
+    seq: int | None = Field(default=None, ge=0)
+    timestamp: int = Field(ge=0)
     bids: list[list[float]]  # [[price, qty], ...]  descending
     asks: list[list[float]]  # [[price, qty], ...]  ascending
 
@@ -59,11 +58,11 @@ class OrderBookDelta(BaseModel):
 
     source: str
     symbol: str
-    seq: int
-    timestamp: int
-    side: str  # "bid" | "ask"
-    price: float
-    qty: float
+    seq: int | None = Field(default=None, ge=0)
+    timestamp: int = Field(ge=0)
+    side: Literal["bid", "ask"]
+    price: float = Field(gt=0)
+    qty: float = Field(ge=0)
 
 
 class L2Features(BaseModel):

@@ -150,6 +150,88 @@ class TestDeltaApply:
         assert book._seq == 11
 
 
+class TestDeltaBatchApply:
+    def test_batch_applies_atomically_and_sets_final_seq(self):
+        book = OrderBook("X")
+        _simple_snap(book, seq=99)
+
+        ok = book.apply_delta_batch(
+            bids=[[100.0, 6.0], [99.5, 2.0]],
+            asks=[[101.0, 0.0], [101.5, 3.0]],
+            first_seq=100,
+            final_seq=102,
+        )
+
+        assert ok
+        assert book._seq == 102
+        assert book.best_bid == (100.0, 6.0)
+        assert book.best_ask == (101.5, 3.0)
+
+    def test_batch_overlap_accepts_binance_range_after_snapshot(self):
+        book = OrderBook("X")
+        _simple_snap(book, seq=100)
+
+        ok = book.apply_delta_batch(
+            bids=[[100.5, 1.0]],
+            asks=[],
+            first_seq=98,
+            final_seq=101,
+        )
+
+        assert ok
+        assert book._seq == 101
+        assert book.best_bid == (100.5, 1.0)
+
+    def test_stale_batch_ignored(self):
+        book = OrderBook("X")
+        _simple_snap(book, seq=100)
+
+        ok = book.apply_delta_batch(
+            bids=[[150.0, 1.0]],
+            asks=[],
+            first_seq=90,
+            final_seq=99,
+        )
+
+        assert ok
+        assert book.best_bid == (100.0, 5.0)
+        assert book._seq == 100
+
+    def test_batch_gap_buffered_until_missing_range_arrives(self):
+        book = OrderBook("X")
+        _simple_snap(book, seq=100)
+
+        ok = book.apply_delta_batch(
+            bids=[[103.0, 1.0]],
+            asks=[],
+            first_seq=103,
+            final_seq=104,
+        )
+        assert not ok
+        assert 103.0 not in book._bids
+
+        ok = book.apply_delta_batch(
+            bids=[[101.0, 1.0]],
+            asks=[],
+            first_seq=101,
+            final_seq=102,
+        )
+
+        assert ok
+        assert book._seq == 104
+        assert 101.0 in book._bids
+        assert 103.0 in book._bids
+
+    def test_invalid_batch_range_marks_book_not_ready(self):
+        book = OrderBook("X")
+        _simple_snap(book, seq=100)
+
+        ok = book.apply_delta_batch(bids=[], asks=[], first_seq=102, final_seq=101)
+
+        assert not ok
+        assert not book.is_ready
+
+
 class TestGapHandling:
     def test_gap_returns_false(self):
         book = OrderBook("X")

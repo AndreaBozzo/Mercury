@@ -5,12 +5,12 @@ Design decisions:
   - __slots__ on every class → no __dict__ per instance, ~40% less RAM per level
   - SortedDict(neg) for bids → O(log n) insert/delete, O(1) best-bid peek
   - SortedDict()    for asks → same, ascending
-  - Gap buffer: out-of-sequence deltas are held until the missing seq arrives.
+  - Gap buffer: out-of-sequence updates are held until the missing seq arrives.
     If the buffer overflows (_MAX_GAP_BUFFER) the book marks itself not-ready
     and a re-snapshot must be applied before deltas are accepted again.
-  - NATS JetStream sequence numbers (msg.metadata.sequence) are the authoritative
-    sequencer because Nephtys' StreamEvent envelope has no seq field.
-    Callers pass the NATS seq into apply_snapshot / apply_delta.
+  - Prefer exchange-provided per-symbol sequence numbers. Broker sequence is a
+    fallback only for a subject that contains one ordered book stream and no
+    interleaved event types.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ class OrderBook:
         # asks: lowest price first (best ask = index 0)
         self._asks: SortedDict = SortedDict()
         self._seq: int = 0
-        self._gap_buffer: dict[int, tuple] = {}
+        self._gap_buffer: dict[int, tuple[list[list[float]], list[list[float]], int]] = {}
         self._ready: bool = False
 
     # ------------------------------------------------------------------
@@ -84,24 +84,53 @@ class OrderBook:
 
         Returns True when the update was accepted (or was a harmless duplicate).
         Returns False when a gap was detected — the caller should stop sending
-        deltas and request a new snapshot from the exchange/Nephtys.
+        deltas and request a new snapshot from the market-data source.
+        """
+        bids = [[price, qty]] if side == "bid" else []
+        asks = [[price, qty]] if side == "ask" else []
+        return self.apply_delta_batch(bids=bids, asks=asks, first_seq=seq, final_seq=seq)
+
+    def apply_delta_batch(
+        self,
+        bids: list[list[float]],
+        asks: list[list[float]],
+        first_seq: int,
+        final_seq: int,
+    ) -> bool:
+        """
+        Apply an atomic batch update.
+
+        Binance depth updates cover an inclusive sequence range [U, u]. A batch
+        is valid when it overlaps the next expected sequence:
+        first_seq <= self._seq + 1 <= final_seq.
         """
         if not self._ready:
             return False
 
+        if first_seq > final_seq:
+            logger.warning(
+                "[%s] Invalid delta batch range first_seq=%d final_seq=%d",
+                self.symbol,
+                first_seq,
+                final_seq,
+            )
+            self._ready = False
+            self._gap_buffer.clear()
+            return False
+
         expected = self._seq + 1
 
-        if seq == expected:
-            self._apply(side, price, qty)
-            self._seq = seq
+        if final_seq <= self._seq:
+            return True  # stale duplicate — ignore silently
+
+        if first_seq <= expected <= final_seq:
+            self._apply_batch(bids, asks)
+            self._seq = final_seq
             self._drain_buffer()
             return True
 
-        if seq <= self._seq:
-            return True  # stale duplicate — ignore silently
-
         # Gap detected: buffer and keep waiting
-        self._gap_buffer[seq] = (side, price, qty)
+        self._gap_buffer[first_seq] = (bids, asks, final_seq)
 
         if len(self._gap_buffer) > _MAX_GAP_BUFFER:
             logger.warning(
@@ -115,7 +144,13 @@ class OrderBook:
             self._gap_buffer.clear()
             return False
 
-        logger.debug("[%s] Seq gap — expected %d got %d, buffered", self.symbol, expected, seq)
+        logger.debug(
+            "[%s] Seq gap — expected %d got range [%d, %d], buffered",
+            self.symbol,
+            expected,
+            first_seq,
+            final_seq,
+        )
         return False
 
     def _apply(self, side: str, price: float, qty: float) -> None:
@@ -125,14 +160,34 @@ class OrderBook:
         else:
             book[price] = qty
 
+    def _apply_batch(self, bids: list[list[float]], asks: list[list[float]]) -> None:
+        for price, qty in bids:
+            self._apply("bid", float(price), float(qty))
+        for price, qty in asks:
+            self._apply("ask", float(price), float(qty))
+
     def _drain_buffer(self) -> None:
         while True:
-            nxt = self._seq + 1
-            if nxt not in self._gap_buffer:
+            expected = self._seq + 1
+            drained = False
+
+            for first_seq in sorted(self._gap_buffer):
+                bids, asks, final_seq = self._gap_buffer[first_seq]
+                if final_seq < expected:
+                    self._gap_buffer.pop(first_seq)
+                    drained = True
+                    break
+                if first_seq > expected:
+                    break
+
+                self._gap_buffer.pop(first_seq)
+                self._apply_batch(bids, asks)
+                self._seq = final_seq
+                drained = True
                 break
-            side, price, qty = self._gap_buffer.pop(nxt)
-            self._apply(side, price, qty)
-            self._seq = nxt
+
+            if not drained:
+                break
 
     # ------------------------------------------------------------------
     # Read path — all O(1) or O(depth)

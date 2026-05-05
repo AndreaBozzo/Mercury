@@ -128,8 +128,18 @@ class _NatsBridge:
         return out
 
 
-# One bridge per process — shared across Bytewax workers via the module.
-_bridge = _NatsBridge(NATS_URL, SUBJECT)
+_bridge: _NatsBridge | None = None
+_bridge_lock = threading.Lock()
+
+
+def _get_bridge() -> _NatsBridge:
+    """Create the NATS bridge lazily so importing this module has no network side effect."""
+    global _bridge
+    if _bridge is None:
+        with _bridge_lock:
+            if _bridge is None:
+                _bridge = _NatsBridge(NATS_URL, SUBJECT)
+    return _bridge
 
 
 # ---------------------------------------------------------------------------
@@ -138,8 +148,11 @@ _bridge = _NatsBridge(NATS_URL, SUBJECT)
 
 
 class _NatsPartition(StatelessSourcePartition):
+    def __init__(self) -> None:
+        self._bridge = _get_bridge()
+
     def next_batch(self) -> list[dict]:
-        raw_msgs = _bridge.drain(200)
+        raw_msgs = self._bridge.drain(200)
         if not raw_msgs:
             time.sleep(0.001)
             return []
@@ -276,6 +289,8 @@ def _imbalance_mapper(state: ImbalanceState | None, item: dict) -> tuple[Imbalan
     if state is None:
         state = ImbalanceState()
     raw_imbalance = item.get("_imbalance_raw")
+    if raw_imbalance is None:
+        raw_imbalance = item.get("payload", {}).get("imbalance")
     mean_imbalance = state.update(raw_imbalance) if raw_imbalance is not None else None
     item["_imbalance"] = mean_imbalance
     return state, item

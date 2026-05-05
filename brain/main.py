@@ -8,8 +8,8 @@ Message routing by MarketEvent.type:
 
 The OrderBook is populated here so that strategies (and the Bytewax processor)
 can consume pre-built microstructure features rather than raw ticks.
-Requires Nephtys to emit "l2_snapshot" / "l2_delta" events — see the
-improvement notes in core/schemas.py while that support is pending.
+Live L2 support depends on upstream "l2_snapshot" / "l2_delta" events with a
+per-symbol exchange sequence. See core/schemas.py for the Mercury-side contract.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import asyncio
 import json
 import logging
 
+from brain.adapters.binance_depth import parse_binance_depth
 from brain.strategies.moving_average import MovingAverageStrategy
 from core.nats_utils import get_jetstream
 from core.order_book import OrderBook
@@ -52,15 +53,15 @@ async def main() -> None:
 
             if event.type == "l2_snapshot":
                 snap = OrderBookSnapshot(**event.payload)
-                # NATS sequence is the authoritative seq when Nephtys doesn't
-                # include one in its envelope (see Nephtys improvement notes).
-                seq = snap.seq or msg.metadata.sequence
+                # Prefer exchange sequence. Broker sequence is a fallback only
+                # for single-stream subjects without interleaved event types.
+                seq = snap.seq or event.seq or msg.metadata.sequence
                 _book(snap.symbol).apply_snapshot(snap.bids, snap.asks, seq)
                 logger.debug("[%s] l2_snapshot applied seq=%d", snap.symbol, seq)
 
             elif event.type == "l2_delta":
                 delta = OrderBookDelta(**event.payload)
-                seq = delta.seq or msg.metadata.sequence
+                seq = delta.seq or event.seq or msg.metadata.sequence
                 ok = _book(delta.symbol).apply_delta(delta.side, delta.price, delta.qty, seq)
                 if not ok:
                     logger.warning(
@@ -68,6 +69,25 @@ async def main() -> None:
                         delta.symbol,
                         seq,
                     )
+
+            elif event.type == "depthUpdate":
+                update = parse_binance_depth(event)
+                if update is None:
+                    logger.warning("Invalid depthUpdate payload from %s", event.source)
+                else:
+                    ok = _book(update.symbol).apply_delta_batch(
+                        bids=update.bids,
+                        asks=update.asks,
+                        first_seq=update.first_seq,
+                        final_seq=update.final_seq,
+                    )
+                    if not ok:
+                        logger.warning(
+                            "[%s] Seq gap on depthUpdate range=[%d,%d] — re-snapshot needed",
+                            update.symbol,
+                            update.first_seq,
+                            update.final_seq,
+                        )
 
             else:
                 # L1 path: trade / ticker events from Nephtys today

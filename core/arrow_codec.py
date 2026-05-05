@@ -2,11 +2,10 @@
 Zero-copy Arrow IPC codec for Mercury's internal NATS transport.
 
 Architecture constraint:
-  Nephtys publishes JSON (StreamEvent envelope, domain/event.go).  We cannot
-  change that today (peer review).  The zero-copy boundary therefore sits one
-  hop *inside* Mercury: the ingestion edge converts JSON→Arrow once, and every
-  subsequent internal hop (brain → executor, brain → plutarch, etc.) passes
-  Arrow IPC bytes over NATS.
+  Upstream connectors publish JSON today.  The zero-copy boundary therefore
+  sits one hop *inside* Mercury: the ingestion edge converts JSON→Arrow once,
+  and every subsequent internal hop (brain → executor, brain → plutarch, etc.)
+  passes Arrow IPC bytes over NATS.
 
 Why Arrow IPC over JSON:
   - No string parsing after the first conversion → ~4–8× less CPU on hot paths

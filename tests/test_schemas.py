@@ -39,9 +39,11 @@ class TestMarketEvent:
             source="nephtys",
             type="ticker",
             timestamp=1_700_000_000_000,
+            seq=42,
             payload={"symbol": "BTC/USDT", "price": 67_000.0, "volume": 1.5},
         )
         assert ev.payload["price"] == 67_000.0
+        assert ev.seq == 42
 
     def test_missing_required_field(self):
         with pytest.raises(ValidationError):
@@ -61,10 +63,13 @@ class TestTradeSignal:
         sig = TradeSignal(**_signal())
         assert sig.confidence_score == 0.8
 
-    def test_invalid_action_accepted(self):
-        # Schema intentionally has no enum constraint on action
-        sig = TradeSignal(**_signal(action="HOLD"))
-        assert sig.action == "HOLD"
+    def test_invalid_action_rejected(self):
+        with pytest.raises(ValidationError):
+            TradeSignal(**_signal(action="HOLD"))
+
+    def test_non_positive_quantity_rejected(self):
+        with pytest.raises(ValidationError):
+            TradeSignal(**_signal(quantity=0))
 
 
 class TestOrderBookSnapshot:
@@ -112,6 +117,18 @@ class TestOrderBookDelta:
             qty=0.0,
         )
         assert delta.qty == 0.0  # remove signal
+
+    def test_invalid_side_rejected(self):
+        with pytest.raises(ValidationError):
+            OrderBookDelta(
+                source="binance",
+                symbol="BTC/USDT",
+                seq=44,
+                timestamp=1_001,
+                side="buy",
+                price=67_001.0,
+                qty=0.0,
+            )
 
 
 class TestL2Features:

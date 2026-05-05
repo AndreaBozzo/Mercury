@@ -6,8 +6,8 @@ Changes from v0.1:
     calls it instead of opening a second connection (was a latent resource leak).
   - publish_arrow() stamps Content-Type so consumers can detect binary frames
     without a separate schema registry.
-  - publish_json() is a thin convenience wrapper kept for Nephtys-facing subjects
-    that still expect plain JSON (until Nephtys adds Arrow IPC support).
+  - publish_json() is a thin convenience wrapper kept for upstream-facing
+    subjects that expect plain JSON.
 """
 
 from __future__ import annotations
@@ -41,5 +41,5 @@ async def publish_arrow(js: JetStreamContext, subject: str, arrow_bytes: bytes) 
 
 
 async def publish_json(js: JetStreamContext, subject: str, data: dict) -> None:
-    """Publish JSON on a Nephtys-compatible subject."""
+    """Publish JSON on an upstream-compatible subject."""
     await js.publish(subject, json.dumps(data).encode())
