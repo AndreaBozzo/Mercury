@@ -33,7 +33,7 @@ def normalize_symbol(raw: str | None) -> str:
 
     for quote in _KNOWN_QUOTES:
         if symbol.endswith(quote) and len(symbol) > len(quote):
-            return f"{symbol[:-len(quote)]}/{quote}"
+            return f"{symbol[: -len(quote)]}/{quote}"
 
     raise ValueError(f"unsupported symbol format: {raw!r}")
 

@@ -309,7 +309,8 @@ def limits_for_sentiment(
 
     return {
         "max_exposure_dollars": float(base_limits["max_exposure_dollars"]) * multiplier,
-        "max_trade_notional_dollars": float(base_limits["max_trade_notional_dollars"]) * max(
+        "max_trade_notional_dollars": float(base_limits["max_trade_notional_dollars"])
+        * max(
             multiplier,
             0.25,
         ),

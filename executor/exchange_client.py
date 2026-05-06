@@ -5,7 +5,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Literal
 
-import ccxt.async_support as ccxt  # type: ignore[import-untyped]
+import ccxt.async_support as ccxt
 from dotenv import load_dotenv
 
 from core.schemas import TradeSignal
@@ -69,7 +69,7 @@ def get_reconcile_symbols() -> list[str]:
     return [normalize_symbol(symbol.strip()) for symbol in raw.split(",") if symbol.strip()]
 
 
-def get_exchange():
+def get_exchange() -> ccxt.Exchange:
     api_key = os.getenv("BINANCE_API_KEY")
     secret_key = os.getenv("BINANCE_SECRET_KEY")
 
@@ -155,7 +155,9 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
-async def _confirm_order_fill(exchange, order: dict[str, Any], symbol: str) -> dict[str, Any]:
+async def _confirm_order_fill(
+    exchange: ccxt.Exchange, order: dict[str, Any], symbol: str
+) -> dict[str, Any]:
     if _is_filled_order(order):
         return order
 
@@ -202,7 +204,9 @@ async def execute_trade(signal: TradeSignal) -> ExecutionResult:
         order_id = (
             str(confirmed_order.get("id"))
             if confirmed_order.get("id") is not None
-            else str(order.get("id")) if order.get("id") is not None else None
+            else str(order.get("id"))
+            if order.get("id") is not None
+            else None
         )
         logger.info("Order filled on %s with id=%s", exchange.id, order_id)
         return ExecutionResult(status="filled", order_id=order_id, order=confirmed_order)
@@ -214,7 +218,7 @@ async def execute_trade(signal: TradeSignal) -> ExecutionResult:
 
 
 async def _fetch_symbol_portfolio_state(
-    exchange,
+    exchange: ccxt.Exchange,
     balance: dict[str, Any],
     symbol: str,
     persisted_state: PersistedPositionState | None = None,
@@ -274,7 +278,7 @@ def _ticker_price(ticker: dict[str, Any]) -> float:
 
 
 async def _cost_basis_from_exchange_trades(
-    exchange,
+    exchange: ccxt.Exchange,
     symbol: str,
     balance_qty: float,
     persisted_state: PersistedPositionState | None,
@@ -310,7 +314,7 @@ async def _cost_basis_from_exchange_trades(
 
 
 async def _fetch_trade_history(
-    exchange,
+    exchange: ccxt.Exchange,
     symbol: str,
     since_timestamp: int | None,
     min_quantity: float,
@@ -409,9 +413,7 @@ def _merge_trade_history(
 
 def _latest_trade_timestamp(trades: list[dict[str, Any]]) -> int | None:
     timestamps = [
-        int(trade.get("timestamp") or 0)
-        for trade in trades
-        if trade.get("timestamp") is not None
+        int(trade.get("timestamp") or 0) for trade in trades if trade.get("timestamp") is not None
     ]
     if not timestamps:
         return None
