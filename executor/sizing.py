@@ -71,6 +71,7 @@ SkipReason = Literal[
     "balance_missing",
     "balance_zero",
     "mark_price_unavailable",
+    "min_notional_unavailable",
     "below_min_notional",
     "invalid_quote",
 ]
@@ -233,7 +234,11 @@ async def size_signal(signal: TradeSignal, js: JetStreamContext) -> SizingDecisi
         return SizingDecision(None, "below_min_notional", target_quote, mark_price)
 
     min_cost = await _load_min_cost(symbol)
-    if min_cost is not None and target_quote < min_cost:
+    if min_cost is None:
+        # Fail-closed: an unavailable min-notional means we cannot verify the floor.
+        logger.warning("Sizer: %s rejected — exchange min-notional unavailable", symbol)
+        return SizingDecision(None, "min_notional_unavailable", target_quote, mark_price)
+    if target_quote < min_cost:
         logger.warning(
             "Sizer: %s target=%.4f %s below exchange min=%.4f",
             symbol,
@@ -244,7 +249,9 @@ async def size_signal(signal: TradeSignal, js: JetStreamContext) -> SizingDecisi
         return SizingDecision(None, "below_min_notional", target_quote, mark_price)
 
     qty = target_quote / mark_price
-    sized = signal.model_copy(update={"quantity": qty})
+    # Fix: preserve the mark price used for sizing so downstream exposure tracking
+    # uses the same price we computed quantity against (not a stale strategy price).
+    sized = signal.model_copy(update={"quantity": qty, "price": mark_price})
     logger.info(
         "Sized %s %s: conf=%.2f mult=%.2f balance=%.2f%s -> qty=%.8f @ %.2f (notional=%.2f%s)",
         signal.action,

@@ -19,6 +19,7 @@ from executor.observability import health_payload, json_response, metrics_payloa
 from executor.risk_manager import (
     check_risk,
     load_exposure,
+    load_halt_flag,
     load_position_states,
     record_trade_execution,
     save_available_balance,
@@ -204,42 +205,50 @@ async def get_message_handler(js):
                 signal.symbol,
             )
 
-            if await check_risk(signal, js):
-                if is_dry_run_enabled():
-                    sized_signal = signal
-                else:
-                    decision = await size_signal(signal, js)
-                    if decision.sized_signal is None:
-                        logger.warning(
-                            "Trade skipped by sizer (reason=%s): %s %s",
-                            decision.reason,
-                            signal.action,
-                            signal.symbol,
-                        )
-                        _record_trade_outcome(signal.action, f"skipped_{decision.reason}")
-                        await msg.ack()
-                        return
-                    sized_signal = decision.sized_signal
-
-                result = await execute_trade(sized_signal)
-                if result.status == "filled":
-                    await record_trade_execution(sized_signal, js)
-                    await _refresh_runtime_state_safe(js)
-                else:
-                    await _refresh_current_exposure(js)
-                _record_trade_outcome(signal.action, result.status)
-                logger.info(
-                    "Trade valid and processed by exchange client with status=%s.",
-                    result.status,
-                )
-                # Acknowledge only after successful execution + NATS KV update
+            # HALT is checked BEFORE sizing — it must short-circuit unconditionally.
+            if await load_halt_flag(js):
+                logger.warning("Trade rejected: HALT flag is set.")
+                _record_trade_outcome(signal.action, "rejected")
                 await msg.ack()
+                return
+
+            if is_dry_run_enabled():
+                sized_signal = signal
             else:
+                decision = await size_signal(signal, js)
+                if decision.sized_signal is None:
+                    logger.warning(
+                        "Trade skipped by sizer (reason=%s): %s %s",
+                        decision.reason,
+                        signal.action,
+                        signal.symbol,
+                    )
+                    _record_trade_outcome(signal.action, f"skipped_{decision.reason}")
+                    await msg.ack()
+                    return
+                sized_signal = decision.sized_signal
+
+            # Notional + exposure checks run on the SIZED signal, never on the placeholder.
+            if not await check_risk(sized_signal, js):
                 await _refresh_runtime_state_safe(js)
                 _record_trade_outcome(signal.action, "rejected")
                 logger.warning("Trade rejected by risk manager.")
-                # Ack rejected signals to avoid infinite retry
                 await msg.ack()
+                return
+
+            result = await execute_trade(sized_signal)
+            if result.status == "filled":
+                await record_trade_execution(sized_signal, js)
+                await _refresh_runtime_state_safe(js)
+            else:
+                await _refresh_current_exposure(js)
+            _record_trade_outcome(signal.action, result.status)
+            logger.info(
+                "Trade valid and processed by exchange client with status=%s.",
+                result.status,
+            )
+            # Acknowledge only after successful execution + NATS KV update
+            await msg.ack()
 
         except Exception as e:
             if signal is not None:

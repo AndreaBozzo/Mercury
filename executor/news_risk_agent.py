@@ -17,10 +17,7 @@ from executor.risk_manager import KV_BUCKET, default_risk_limits, save_risk_limi
 logger = logging.getLogger("news_risk_agent")
 
 NEWS_RISK_AGENT_INTERVAL_SECONDS = float(os.getenv("NEWS_RISK_AGENT_INTERVAL_SECONDS", "300"))
-NEWS_RISK_BRIDGE_PATH = os.getenv(
-    "NEWS_RISK_BRIDGE_PATH",
-    "/home/andrea/Documenti/lancedb-nephtys-bridge",
-)
+NEWS_RISK_BRIDGE_PATH = os.getenv("NEWS_RISK_BRIDGE_PATH", "")
 NEWS_RISK_BRIDGE_SERVICE_URL = os.getenv("NEWS_RISK_BRIDGE_SERVICE_URL", "").rstrip("/")
 NEWS_RISK_BRIDGE_PYTHON = os.getenv("NEWS_RISK_BRIDGE_PYTHON", "").strip()
 NEWS_RISK_QUERY = os.getenv(

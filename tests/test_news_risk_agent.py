@@ -1,3 +1,5 @@
+import inspect
+
 from executor import news_risk_agent
 from executor.news_risk_agent import (
     analyze_news_with_heuristic,
@@ -5,6 +7,14 @@ from executor.news_risk_agent import (
     limits_for_sentiment,
 )
 from executor.risk_manager import default_risk_limits
+
+
+def test_bridge_path_default_is_not_a_developer_machine():
+    """Regression: NEWS_RISK_BRIDGE_PATH default must not leak a developer-specific path."""
+    source = inspect.getsource(news_risk_agent)
+    assert "/home/andrea" not in source, (
+        "Developer-specific path leaked into source. Use empty string default + env override."
+    )
 
 
 def test_extract_bridge_texts_parses_json_query_output():

@@ -82,8 +82,12 @@ def get_exchange() -> ccxt.Exchange:
         }
     )
 
-    # Always use testnet/sandbox mode initially
-    exchange.set_sandbox_mode(True)
+    # Sandbox is the default; flip BINANCE_SANDBOX=false explicitly for mainnet.
+    use_sandbox = _env_flag("BINANCE_SANDBOX", default=True)
+    if use_sandbox:
+        exchange.set_sandbox_mode(True)
+    else:
+        logger.warning("BINANCE_SANDBOX=false — executor is targeting MAINNET. Real funds at risk.")
     return exchange
 
 

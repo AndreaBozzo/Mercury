@@ -151,15 +151,26 @@ async def load_halt_flag(js: JetStreamContext) -> bool:
 async def check_risk(signal: TradeSignal, js: JetStreamContext) -> bool:
     """
     Evaluates whether a trade signal passes strict risk parameters.
+
+    Requires `signal.price` to be set — the executor's sizer populates this
+    from the live mark price before this check runs. A signal without a price
+    is rejected to avoid the legacy "assume 50000.0" fallback that silently
+    corrupted exposure tracking for altcoins.
     """
     if await load_halt_flag(js):
         logger.warning("Risk check failed: HALT flag is set.")
         return False
 
+    if signal.price is None:
+        logger.warning(
+            "Risk check failed: signal has no price (sized_signal must carry mark_price)."
+        )
+        return False
+
     current_exposure = await load_exposure(js)
     risk_limits = await load_risk_limits(js)
 
-    estimated_cost = signal.quantity * (signal.price if signal.price else 50000.0)
+    estimated_cost = signal.quantity * signal.price
     max_trade_notional = float(risk_limits["max_trade_notional_dollars"])
     max_exposure = float(risk_limits["max_exposure_dollars"])
 
@@ -184,7 +195,12 @@ async def check_risk(signal: TradeSignal, js: JetStreamContext) -> bool:
 
 async def record_trade_execution(signal: TradeSignal, js: JetStreamContext) -> float:
     current_exposure = await load_exposure(js)
-    estimated_cost = signal.quantity * (signal.price if signal.price else 50000.0)
+
+    if signal.price is None:
+        logger.error("record_trade_execution called without signal.price — exposure NOT updated.")
+        return current_exposure
+
+    estimated_cost = signal.quantity * signal.price
 
     if signal.action == "BUY":
         new_exposure = current_exposure + estimated_cost
