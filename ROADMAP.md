@@ -17,7 +17,7 @@ This document tracks what it would take to turn Mercury from a working proof-of-
 | Arrow IPC internal transport | ✅ Built, tested | Binary path is ready; not yet the default live path |
 | Bytewax stream processor | ✅ Built | Not yet replacing brain/main.py in prod |
 | Backtester (Lance + Ray) | ✅ Built, tested | No historical data yet |
-| Plutarch archiver | ✅ Working | ACK durability still needs tightening before long unattended runs |
+| Plutarch archiver | ✅ Hardened 2026-05-19 | Compaction/retention + Telegram alert on quarantine still pending (M2) |
 
 **Honest summary:** Mercury can now receive a live Binance price feed, generate a moving average signal, bootstrap and maintain a BTC/USDT L2 book, pass signals through a circuit-breaker-aware risk check, and execute confirmed paper trades on Binance Spot Testnet with startup reconciliation and live executor metrics. The infrastructure path works end-to-end; the strategy still has no demonstrated edge.
 
@@ -54,6 +54,37 @@ Live deposit confirmed at 9 EUR; `MAX_NOTIONAL_EUR` default raised from 2.0 to 5
 - `brain/risk/volatility_modulator.py` as a coroutine task spawned by `brain/main.py`. Rolling stdev → multiplier ∈ [0, 1] published to `vol_modulator` KV.
 - Flip `SIZING_REQUIRE_VOL_MODULATOR=true` once the modulator is running.
 
+### Open findings (from 2026-05-19 code reviews)
+
+Two code reviews on 2026-05-19 surfaced findings. The critical and bug-correlated items were fixed inline (see Week 1 + Plutarch hardening sections above). The items below are **deferred deliberately** and must be cleared before the M3 live flip — most of them slot naturally into M2 (Durability & Observability) or M3 (Drill & Cushion).
+
+#### Executor / sizer — review of 2026-05-19
+
+| # | Finding | Location | Severity | Target |
+|---|---|---|---|---|
+| E5 | `_market_min_cost` cache has no TTL or negative caching; `load_markets()` re-downloads ~1.5 MB per cache miss. Stale min-notional unnoticed until process restart. | `executor/sizing.py:90-109` | high | M2 |
+| E6 | Every `size_signal()` opens 2 fresh ccxt exchanges (`_fetch_mark_price` + `_load_min_cost`); same pattern in `fetch_portfolio_snapshot` and `fetch_open_orders`. Rate-limit risk in live. | `executor/sizing.py:113`, `executor/exchange_client.py:91,130,216` | high | M2 (move to singleton ccxt client with shared session) |
+| E9 | KV reads swallow all exceptions; `load_halt_flag` returns `False` on NATS transport errors (HALT fails OPEN). | `executor/risk_manager.py:24-32,50-62,124-137,140-148` | medium | M2 — differentiate `nats.js.errors.KeyNotFoundError` from transport errors; HALT must fail-safe to `True` on transport failure |
+| E10 | `_is_stale` catches only `ValueError`; a non-string timestamp raises `TypeError` and crashes the sizer (theoretical today; cheap fix). | `executor/sizing.py:129-139` | low | M2 |
+| E11 | `RISK_EUR_PER_QUOTE` is a single scalar hardcoded for USDT. Adding any third quote asset (BUSD, FDUSD, EUR via other pairs) yields wrong conversion. | `executor/sizing.py:61,226-229` | medium | M3 (only when multi-symbol lands; today BTC/USDT only) |
+| E13 | `_balance_free` (line 110) and `_balance_total` (line 285) handle the same ccxt balance shapes — comment-only fix to explain the intentional split (`free` excludes locked orders, `total` includes them). | `executor/exchange_client.py:110-123,285-300` | low | M2 |
+
+`MAX_NOTIONAL_EUR=5.5` default (above Binance min-notional) is the active value. On a 9 EUR deposit this gates to ~1 trade in flight at a time — pre-flight constraint to remember on first live run, not a finding.
+
+#### Plutarch — review of 2026-05-19
+
+| # | Finding | Location | Severity | Target |
+|---|---|---|---|---|
+| P5 | Pull-consumer is implemented but inflight/ack-pending limits are still implicit. No metric for `max_ack_pending` headroom. Will only bite once L2 deltas (~100 evt/s) ship. | `plutarch/archiver.py:199-210` | medium | M2 (add `ack_pending` gauge + explicit consumer config) |
+| P6 | No compaction / `cleanup_old_versions` cron. Lance fragment count grows linearly with batches; manifest scans get slow after months. At ~15 evt/s estimated ~45 GB raw / 6 months. | `plutarch/archiver.py` (no cron task) | medium | M2 (weekly `lance.dataset(p).optimize.compact_files()` + `.cleanup_old_versions(older_than=7d)` in-process scheduler) |
+| P11 | Quarantine write triggers `_state["quarantine_writes"] += 1` and an ERROR log, but no Telegram alert / external surfacing. A flood of poison batches would be silent. | `plutarch/archiver.py:103-121` | high | M2 — wire `core/alerts.py` to push when `quarantine_writes > 0` |
+
+#### Cross-cutting: mypy strictness
+
+| # | Finding | Severity | Target |
+|---|---|---|---|
+| X1 | Mypy baseline is intentionally permissive (`check_untyped_defs = false`, no `--strict`). New code added in M1 is `--strict`-clean opportunistically, but legacy modules (`brain/main.py`, `brain/stream_processor.py`) still rely on the permissive baseline. | medium | End of Week 2 / start of M2 — single project-wide tightening pass (per user, 2026-05-19) |
+
 ### Live Capital Flip Gate (must all be true before flipping)
 
 - 14 consecutive days of testnet uptime, no manual interventions
@@ -68,6 +99,9 @@ Live deposit confirmed at 9 EUR; `MAX_NOTIONAL_EUR` default raised from 2.0 to 5
 - Wall-clock session cap enforced (auto-exit after N minutes regardless of P&L)
 - NTP time-sync verified on host
 - Runbook exists in `docs/runbook.md`
+- **E9 closed**: `load_halt_flag` fails SAFE (returns `True`) on NATS transport errors — verified with a NATS-down drill
+- **P11 closed**: Telegram alert fires within 60 s of `plutarch_quarantine_writes_total` incrementing — verified with a forced poison batch
+- **E5/E6 closed**: ccxt exchange instance is reused (singleton) and `_market_min_cost` has TTL — no per-signal `load_markets()` re-download under live load
 
 ### Nephtys-side work (must stay generic)
 
