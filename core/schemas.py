@@ -5,6 +5,13 @@ from pydantic import BaseModel, Field, field_validator
 
 from core.symbols import normalize_symbol
 
+# Placeholder quantity emitted by strategies. The executor's sizer (executor/sizing.py)
+# is the authoritative source of order size; strategies emit intent (side + confidence)
+# only. If a signal reaches the exchange with this value it will trip Binance's
+# min-notional check and fail loud — that is intentional.
+INTENT_PLACEHOLDER_QTY = 1e-8
+
+
 # ---------------------------------------------------------------------------
 # L1 — current Nephtys output (JSON StreamEvent envelope)
 # ---------------------------------------------------------------------------

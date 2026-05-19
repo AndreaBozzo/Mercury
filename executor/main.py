@@ -3,6 +3,7 @@ import contextlib
 import json
 import logging
 import os
+from datetime import UTC, datetime
 
 from core.nats_utils import get_jetstream
 from core.schemas import TradeSignal
@@ -20,9 +21,11 @@ from executor.risk_manager import (
     load_exposure,
     load_position_states,
     record_trade_execution,
+    save_available_balance,
     save_exposure,
     save_position_states,
 )
+from executor.sizing import size_signal
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("executor")
@@ -70,6 +73,11 @@ async def _refresh_runtime_state(js) -> None:
         },
     )
     await save_exposure(js, snapshot.current_exposure)
+    await save_available_balance(
+        js,
+        snapshot.quote_free,
+        datetime.now(UTC).isoformat(),
+    )
     _set_current_exposure(snapshot.current_exposure)
     _set_position_pnl(snapshot.position_pnl)
 
@@ -197,9 +205,25 @@ async def get_message_handler(js):
             )
 
             if await check_risk(signal, js):
-                result = await execute_trade(signal)
+                if is_dry_run_enabled():
+                    sized_signal = signal
+                else:
+                    decision = await size_signal(signal, js)
+                    if decision.sized_signal is None:
+                        logger.warning(
+                            "Trade skipped by sizer (reason=%s): %s %s",
+                            decision.reason,
+                            signal.action,
+                            signal.symbol,
+                        )
+                        _record_trade_outcome(signal.action, f"skipped_{decision.reason}")
+                        await msg.ack()
+                        return
+                    sized_signal = decision.sized_signal
+
+                result = await execute_trade(sized_signal)
                 if result.status == "filled":
-                    await record_trade_execution(signal, js)
+                    await record_trade_execution(sized_signal, js)
                     await _refresh_runtime_state_safe(js)
                 else:
                     await _refresh_current_exposure(js)

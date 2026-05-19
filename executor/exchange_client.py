@@ -42,6 +42,7 @@ class PortfolioSnapshot:
     symbols: dict[str, SymbolPortfolioState]
     current_exposure: float
     position_pnl: float
+    quote_free: dict[str, float]  # cash balance per quote asset (e.g. {"EUR": 9.0, "USDT": 0.0})
 
 
 @dataclass(frozen=True)
@@ -95,6 +96,33 @@ async def fetch_open_orders(symbol: str | None = None) -> list[dict[str, Any]]:
         await exchange.close()
 
 
+def _quote_assets_from_symbols(symbols: list[str]) -> list[str]:
+    quotes: list[str] = []
+    seen: set[str] = set()
+    for raw_symbol in symbols:
+        _base, quote = split_symbol(normalize_symbol(raw_symbol))
+        if quote and quote not in seen:
+            seen.add(quote)
+            quotes.append(quote)
+    return quotes
+
+
+def _balance_free(balance: dict[str, Any], asset: str) -> float:
+    free_bucket = balance.get("free")
+    if isinstance(free_bucket, dict):
+        value = _as_float(free_bucket.get(asset))
+        if value is not None:
+            return max(0.0, value)
+
+    asset_bucket = balance.get(asset)
+    if isinstance(asset_bucket, dict):
+        value = _as_float(asset_bucket.get("free"))
+        if value is not None:
+            return max(0.0, value)
+
+    return 0.0
+
+
 async def fetch_portfolio_snapshot(
     symbols: list[str],
     persisted_positions: Mapping[str, Mapping[str, Any]] | None = None,
@@ -119,10 +147,15 @@ async def fetch_portfolio_snapshot(
             current_exposure += state.market_value
             position_pnl += state.unrealized_pnl
 
+        quote_free = {
+            asset: _balance_free(balance, asset) for asset in _quote_assets_from_symbols(symbols)
+        }
+
         return PortfolioSnapshot(
             symbols=symbol_states,
             current_exposure=current_exposure,
             position_pnl=position_pnl,
+            quote_free=quote_free,
         )
     finally:
         await exchange.close()

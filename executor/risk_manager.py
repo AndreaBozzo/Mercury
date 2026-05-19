@@ -2,6 +2,7 @@ import logging
 import os
 from collections.abc import Mapping
 from json import dumps, loads
+from typing import Any
 
 from nats.js import JetStreamContext
 
@@ -17,6 +18,7 @@ EXPOSURE_KEY = "current_exposure"
 HALT_KEY = "HALT"
 POSITION_STATE_PREFIX = "position_state:"
 RISK_LIMITS_KEY = "risk_limits"
+AVAILABLE_BALANCE_KEY = "available_balance"
 
 
 async def load_exposure(js: JetStreamContext) -> float:
@@ -104,6 +106,35 @@ async def save_position_states(
 
     for symbol, state in states.items():
         await kv.put(_position_state_key(symbol), dumps(state, sort_keys=True).encode())
+
+
+async def save_available_balance(
+    js: JetStreamContext,
+    quote_free: Mapping[str, float],
+    computed_at_iso: str,
+) -> None:
+    kv = await js.key_value(KV_BUCKET)
+    payload = {
+        "quote_free": {asset: float(value) for asset, value in quote_free.items()},
+        "computed_at": computed_at_iso,
+    }
+    await kv.put(AVAILABLE_BALANCE_KEY, dumps(payload, sort_keys=True).encode())
+
+
+async def load_available_balance(
+    js: JetStreamContext,
+) -> dict[str, Any] | None:
+    try:
+        kv = await js.key_value(KV_BUCKET)
+        entry = await kv.get(AVAILABLE_BALANCE_KEY)
+        if entry.value is None:
+            return None
+        raw = loads(entry.value.decode())
+        if not isinstance(raw, dict):
+            return None
+        return raw
+    except Exception:
+        return None
 
 
 async def load_halt_flag(js: JetStreamContext) -> bool:

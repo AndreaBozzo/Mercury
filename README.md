@@ -115,3 +115,44 @@ For market data, Mercury currently consumes:
 Nephtys stays intentionally generic here: it classifies the event, preserves timestamp and sequence metadata, and forwards the raw payload. Mercury owns the Binance-specific depth adapter and snapshot bootstrap logic.
 
 Across those paths, Mercury normalizes symbols at the schema boundary. A live trade event carrying `BTCUSDT` and an L2 book event carrying `BTC/USDT` will converge to the same internal symbol, which keeps metrics labels, book state, and execution reconciliation aligned.
+
+## Position Sizing (M1)
+
+Mercury strategies emit **intent** (side + confidence) with a placeholder quantity (`INTENT_PLACEHOLDER_QTY = 1e-8` in `core/schemas.py`). The executor's sizer (`executor/sizing.py`) converts that intent into a real order size:
+
+```
+target_quote = balance_quote × SIZING_FIXED_FRACTION × confidence × vol_multiplier
+target_quote = min(target_quote, MAX_NOTIONAL_EUR_in_quote)
+qty          = target_quote / mark_price
+```
+
+Fail-safe behaviour — the sizer returns `None` (and the executor skips the trade) when:
+
+| Reason                    | Meaning                                                              |
+|---------------------------|----------------------------------------------------------------------|
+| `vol_modulator_stale`     | `vol_modulator` KV entry older than `VOL_MODULATOR_MAX_AGE_SECONDS`  |
+| `vol_modulator_missing`   | KV key absent AND `SIZING_REQUIRE_VOL_MODULATOR=true`                |
+| `balance_stale`           | `available_balance` KV entry older than `SIZING_BALANCE_MAX_AGE_SECONDS` |
+| `balance_missing`         | KV key absent, or quote asset not credited                           |
+| `balance_zero`            | Free balance for the quote asset is `<= 0`                           |
+| `mark_price_unavailable`  | `fetch_ticker` returned no usable price                              |
+| `below_min_notional`      | Computed notional below Binance exchange min                         |
+
+The sizer is bypassed in `DRY_RUN=true` mode — the placeholder quantity goes straight through. Flip `DRY_RUN=false` to engage real sizing (sandbox or live).
+
+### M1 smoke checklist (manual)
+
+After `make run-executor` with `DRY_RUN=false` on testnet:
+
+1. Wait ~30s for the portfolio refresh loop, then:
+   `nats kv get mercury_wallet_state available_balance` should return `{"quote_free": {...}, "computed_at": "..."}`.
+2. Inject a smoke signal:
+   ```bash
+   nats pub trade.signals '{"strategy_id":"smoke","symbol":"BTC/USDT","action":"BUY","order_type":"MARKET","quantity":1e-8,"confidence_score":0.5,"timestamp":"2026-05-19T12:00:00Z"}'
+   ```
+   Expect executor logs: `check_risk` pass → `Sized BUY BTC/USDT ...` → `Order filled on binance with id=...`.
+3. Delete the modulator key to verify the fail-safe:
+   `nats kv del mercury_wallet_state vol_modulator` (after setting `SIZING_REQUIRE_VOL_MODULATOR=true`) → next signal should log `skipped_vol_modulator_missing`.
+4. Drop `MAX_NOTIONAL_EUR=0.5` and re-publish → expect `skipped_below_min_notional`.
+
+The full smoke wrapper (`make smoke-m1`) is deferred to M2 alongside CI and Telegram alerting.

@@ -60,6 +60,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Literal
 
 import bytewax.operators as op
 import nats
@@ -67,8 +68,9 @@ from bytewax.dataflow import Dataflow
 from bytewax.inputs import DynamicSource, StatelessSourcePartition
 from bytewax.outputs import DynamicSink, StatelessSinkPartition
 from bytewax.run import cli_main
+from nats.js import JetStreamContext
 
-from core.schemas import TradeSignal
+from core.schemas import INTENT_PLACEHOLDER_QTY, TradeSignal
 
 logger = logging.getLogger("stream_processor")
 
@@ -196,7 +198,7 @@ class NatsSource(DynamicSource):
 class _SignalSinkPartition(StatelessSinkPartition):
     def __init__(self) -> None:
         self._loop = asyncio.new_event_loop()
-        self._js = None
+        self._js: JetStreamContext | None = None
         t = threading.Thread(target=self._setup, daemon=True, name="signal-sink")
         t.start()
         # give the thread a moment to connect before the first write
@@ -308,6 +310,7 @@ def _emit_signal(kv: tuple[str, dict]) -> tuple[str, TradeSignal | None]:
 
     deviation = (price - vwap) / vwap
 
+    action: Literal["BUY", "SELL"]
     if deviation < -SIGNAL_THRESHOLD:
         action = "BUY"
         # Imbalance confirmation: if selling pressure dominates, skip
@@ -326,7 +329,7 @@ def _emit_signal(kv: tuple[str, dict]) -> tuple[str, TradeSignal | None]:
         symbol=symbol,
         action=action,
         order_type="MARKET",
-        quantity=0.01,
+        quantity=INTENT_PLACEHOLDER_QTY,
         price=price,
         confidence_score=confidence,
         allocation_percentage=0.1 * confidence * 100,
@@ -340,7 +343,9 @@ def _is_valid_signal(kv: tuple[str, TradeSignal | None]) -> bool:
 
 
 def _unwrap_signal(kv: tuple[str, TradeSignal | None]) -> TradeSignal:
-    return kv[1]
+    signal = kv[1]
+    assert signal is not None  # guaranteed by upstream _is_valid_signal filter
+    return signal
 
 
 # ---------------------------------------------------------------------------
@@ -358,10 +363,11 @@ def build_dataflow() -> Dataflow:
     keyed = op.map("key_by_symbol", raw, _key_by_symbol)
 
     # 3. Rolling VWAP (Bytewax preserves per-key state across epochs)
-    vwap_out = op.stateful_map("vwap", keyed, lambda: None, _vwap_mapper)
+    # Bytewax type stubs incomplete; the 4-arg form is correct at runtime.
+    vwap_out = op.stateful_map("vwap", keyed, lambda: None, _vwap_mapper)  # type: ignore[call-arg, arg-type, misc, var-annotated]
 
     # 4. Rolling mean order book imbalance (populated by l2_delta handler in main.py)
-    imbal_out = op.stateful_map("imbalance", vwap_out, lambda: None, _imbalance_mapper)
+    imbal_out = op.stateful_map("imbalance", vwap_out, lambda: None, _imbalance_mapper)  # type: ignore[call-arg, arg-type, misc, var-annotated]
 
     # 5. Signal emission with VWAP divergence + imbalance confirmation
     signals = op.map("emit_signal", imbal_out, _emit_signal)

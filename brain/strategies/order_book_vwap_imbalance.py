@@ -4,7 +4,7 @@ from collections import deque
 from datetime import datetime
 from typing import Literal
 
-from core.schemas import MarketEvent, TradeSignal
+from core.schemas import INTENT_PLACEHOLDER_QTY, MarketEvent, TradeSignal
 from core.symbols import normalize_symbol
 
 
@@ -93,7 +93,7 @@ class OrderBookVwapImbalanceStrategy:
             symbol=symbol,
             action=action,
             order_type="MARKET",
-            quantity=0.01,
+            quantity=INTENT_PLACEHOLDER_QTY,
             price=price,
             confidence_score=confidence,
             allocation_percentage=min(100.0, confidence * 10.0),

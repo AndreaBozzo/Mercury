@@ -9,7 +9,7 @@ import subprocess
 import time
 from collections.abc import Iterable
 
-import requests  # type: ignore[import-untyped]
+import requests
 
 from core.nats_utils import get_jetstream
 from executor.risk_manager import KV_BUCKET, default_risk_limits, save_risk_limits

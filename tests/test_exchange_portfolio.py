@@ -162,10 +162,16 @@ def test_build_persisted_position_state_tracks_latest_trade_timestamp():
 
 
 class FakeSnapshot:
-    def __init__(self, current_exposure: float, position_pnl: float):
+    def __init__(
+        self,
+        current_exposure: float,
+        position_pnl: float,
+        quote_free: dict[str, float] | None = None,
+    ):
         self.current_exposure = current_exposure
         self.position_pnl = position_pnl
         self.symbols: dict[str, object] = {}
+        self.quote_free = quote_free if quote_free is not None else {}
 
 
 @pytest.mark.asyncio
@@ -179,10 +185,15 @@ async def test_refresh_runtime_state_uses_exchange_snapshot(monkeypatch):
 
     async def fake_fetch_portfolio_snapshot(_symbols, persisted_positions=None):
         assert persisted_positions == {}
-        return FakeSnapshot(current_exposure=75.0, position_pnl=12.5)
+        return FakeSnapshot(
+            current_exposure=75.0,
+            position_pnl=12.5,
+            quote_free={"USDT": 100.0, "EUR": 9.0},
+        )
 
     saved: list[float] = []
     saved_states: list[dict] = []
+    saved_balances: list[dict] = []
 
     async def fake_save_exposure(_js, value: float):
         saved.append(value)
@@ -193,10 +204,14 @@ async def test_refresh_runtime_state_uses_exchange_snapshot(monkeypatch):
     async def fake_save_position_states(_js, states):
         saved_states.append(states)
 
+    async def fake_save_available_balance(_js, quote_free, computed_at_iso):
+        saved_balances.append({"quote_free": dict(quote_free), "computed_at": computed_at_iso})
+
     monkeypatch.setattr(executor_main, "fetch_portfolio_snapshot", fake_fetch_portfolio_snapshot)
     monkeypatch.setattr(executor_main, "load_position_states", fake_load_position_states)
     monkeypatch.setattr(executor_main, "save_exposure", fake_save_exposure)
     monkeypatch.setattr(executor_main, "save_position_states", fake_save_position_states)
+    monkeypatch.setattr(executor_main, "save_available_balance", fake_save_available_balance)
 
     await executor_main._refresh_runtime_state(js=object())
 
@@ -204,3 +219,6 @@ async def test_refresh_runtime_state_uses_exchange_snapshot(monkeypatch):
     assert executor_main._position_pnl == 12.5
     assert saved == [75.0]
     assert saved_states == [{}]
+    assert len(saved_balances) == 1
+    assert saved_balances[0]["quote_free"] == {"USDT": 100.0, "EUR": 9.0}
+    assert saved_balances[0]["computed_at"]  # ISO timestamp present

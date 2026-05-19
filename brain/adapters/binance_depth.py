@@ -72,9 +72,10 @@ def fetch_binance_depth_snapshot(
     base_url: str = BINANCE_REST_URL,
 ) -> BinanceDepthSnapshot:
     """Fetch a REST order book snapshot from Binance."""
+    params: dict[str, str | int] = {"symbol": _binance_symbol(symbol), "limit": limit}
     response = requests.get(
         f"{base_url.rstrip('/')}/api/v3/depth",
-        params={"symbol": _binance_symbol(symbol), "limit": limit},
+        params=params,
         timeout=10,
     )
     response.raise_for_status()

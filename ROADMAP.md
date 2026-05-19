@@ -33,6 +33,20 @@ The phases below remain the long-arc view. The next 2–3 months are scoped tigh
 | **M2 — Durability & Observability** | Survive crashes, make humans hear breakage | `executor/state_store.py` (SQLite mirror of NATS KV exposure, exchange truth wins on disagreement). `core/alerts.py` (Telegram, 1 msg/min/category). Tests for `plutarch/archiver.py` and `brain/stream_processor.py` (currently 0% coverage). GitHub Actions CI (uv + ruff + pytest). |
 | **M3 — Drill, Cushion, Live Flip** | Prove safety net under stress, then flip the smallest possible amount | `scripts/drill_halt.py` (synthetic vol spike + broken depth + rejected order → HALT must trip, alerts must fire, sizer must go to 0). `scripts/halt.py` (first-class kill switch). 14-day testnet soak. Mainnet via env flag, `MAX_NOTIONAL_EUR=2`, single strategy = moving_average. Compare first 10 live fills to backtester predictions. |
 
+### M1 progress (as of 2026-05-19)
+
+Live deposit confirmed at 9 EUR; `MAX_NOTIONAL_EUR` default raised from 2.0 to 5.5 to sit above Binance min-notional (~4.6 EUR). News risk agent kept (not deleted) and runs in parallel — writes to `risk_limits` KV; the vol modulator (Week 2) will write to a separate `vol_modulator` KV key so the two staleness budgets do not collide.
+
+**Week 1 — done**
+- `INTENT_PLACEHOLDER_QTY = 1e-8` in `core/schemas.py`; the three strategies (`brain/strategies/moving_average.py`, `brain/strategies/order_book_vwap_imbalance.py`, `brain/stream_processor.py`) emit the placeholder instead of `quantity=0.01`.
+- `_refresh_runtime_state` now writes `available_balance` to the `mercury_wallet_state` KV bucket every 15 s (free balance per quote asset + ISO timestamp).
+- `executor/sizing.py` MVP: reads `available_balance` + `vol_modulator` + inline `fetch_ticker`, caches Binance min-notional, returns a typed `SizingDecision` with explicit skip reasons.
+- Sizer wired into `executor/main.py` between `check_risk` and `execute_trade`. `DRY_RUN` bypasses it; live mode acks and records `skipped_<reason>` on rejection.
+
+**Week 2 — next**
+- `brain/risk/volatility_modulator.py` as a coroutine task spawned by `brain/main.py`. Rolling stdev → multiplier ∈ [0, 1] published to `vol_modulator` KV.
+- Flip `SIZING_REQUIRE_VOL_MODULATOR=true` once the modulator is running.
+
 ### Live Capital Flip Gate (must all be true before flipping)
 
 - 14 consecutive days of testnet uptime, no manual interventions

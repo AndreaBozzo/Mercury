@@ -217,3 +217,77 @@ async def test_message_handler_does_not_ack_when_execution_raises(monkeypatch):
     await handler(message)
 
     assert message.ack_count == 0
+
+
+@pytest.mark.asyncio
+async def test_message_handler_skips_when_sizer_rejects(monkeypatch):
+    """Live mode: sizer returns no sized_signal -> no trade placed, message acked."""
+    from executor.sizing import SizingDecision
+
+    signal = make_signal()
+    message = FakeMessage(signal.model_dump_json().encode())
+
+    async def fake_check_risk(_signal, _js):
+        return True
+
+    async def fake_size_signal(_signal, _js):
+        return SizingDecision(sized_signal=None, reason="vol_modulator_stale")
+
+    execute_calls: list = []
+
+    async def fake_execute_trade(_signal):
+        execute_calls.append(_signal)
+        return ExecutionResult(status="filled", order_id="x")
+
+    monkeypatch.setattr("executor.main.is_dry_run_enabled", lambda: False)
+    monkeypatch.setattr("executor.main.check_risk", fake_check_risk)
+    monkeypatch.setattr("executor.main.size_signal", fake_size_signal)
+    monkeypatch.setattr("executor.main.execute_trade", fake_execute_trade)
+
+    handler = await get_message_handler(js=object())
+    await handler(message)
+
+    assert message.ack_count == 1
+    assert execute_calls == []
+
+
+@pytest.mark.asyncio
+async def test_message_handler_passes_sized_signal_to_execute(monkeypatch):
+    """Live mode: sizer returns a sized_signal -> that signal (not placeholder) is executed."""
+    from executor.sizing import SizingDecision
+
+    signal = make_signal()
+    sized = signal.model_copy(update={"quantity": 0.0001})
+    message = FakeMessage(signal.model_dump_json().encode())
+
+    async def fake_check_risk(_signal, _js):
+        return True
+
+    async def fake_size_signal(_signal, _js):
+        return SizingDecision(sized_signal=sized, reason="ok")
+
+    executed: list[TradeSignal] = []
+
+    async def fake_execute_trade(s: TradeSignal):
+        executed.append(s)
+        return ExecutionResult(status="filled", order_id="ok-1", order={"id": "ok-1"})
+
+    async def fake_record_trade_execution(_signal, _js):
+        return 0.0
+
+    async def fake_refresh(_js):
+        return None
+
+    monkeypatch.setattr("executor.main.is_dry_run_enabled", lambda: False)
+    monkeypatch.setattr("executor.main.check_risk", fake_check_risk)
+    monkeypatch.setattr("executor.main.size_signal", fake_size_signal)
+    monkeypatch.setattr("executor.main.execute_trade", fake_execute_trade)
+    monkeypatch.setattr("executor.main.record_trade_execution", fake_record_trade_execution)
+    monkeypatch.setattr("executor.main._refresh_runtime_state_safe", fake_refresh)
+
+    handler = await get_message_handler(js=object())
+    await handler(message)
+
+    assert message.ack_count == 1
+    assert len(executed) == 1
+    assert executed[0].quantity == 0.0001
