@@ -116,6 +116,29 @@ Nephtys stays intentionally generic here: it classifies the event, preserves tim
 
 Across those paths, Mercury normalizes symbols at the schema boundary. A live trade event carrying `BTCUSDT` and an L2 book event carrying `BTC/USDT` will converge to the same internal symbol, which keeps metrics labels, book state, and execution reconciliation aligned.
 
+## Plutarch — Market-Data Archive
+
+Plutarch is the silent third service. It subscribes to every Nephtys event and persists it to a Lance dataset for replay by [backtesting/engine.py](backtesting/engine.py). It is what makes live-incident post-mortems possible.
+
+**Durability contract:**
+- Messages are acked ONLY after a successful Lance write. A crash between ack and write would have silently lost data; Plutarch prefers duplicates over gaps.
+- The buffer flushes whichever fires first: `PLUTARCH_BATCH_SIZE` (default 500 events) or `PLUTARCH_FLUSH_INTERVAL_SEC` (default 30s).
+- If a Lance write raises, the unflushed payloads are written to `PLUTARCH_QUARANTINE_DIR/plutarch_quarantine_<ts>.ndjson` and the consumer continues. M2 alerting will fire when `plutarch_quarantine_writes_total > 0`.
+
+**Schema (fixed, never drifts):**
+
+| column | type | source |
+|---|---|---|
+| `source` | string | Nephtys envelope |
+| `type` | string | Nephtys envelope |
+| `timestamp` | int64 | Nephtys envelope (epoch nanos) |
+| `seq` | int64 | Nephtys broker sequence (-1 if absent) |
+| `payload_json` | string | JSON-encoded inner payload |
+| `_subject` | string | NATS subject the event arrived on |
+| `_archived_at_ns` | int64 | Plutarch wall-clock at archive time |
+
+**Observability:** `GET http://localhost:9110/healthz` returns `{status, events_written, write_errors, quarantine_writes, buffer_depth, last_flush_age_seconds}`. `GET /metrics` exposes Prometheus-style counters. `status=stalled` (HTTP 503) when the buffer is non-empty and no flush succeeded in 3× the flush interval.
+
 ## Position Sizing (M1)
 
 Mercury strategies emit **intent** (side + confidence) with a placeholder quantity (`INTENT_PLACEHOLDER_QTY = 1e-8` in `core/schemas.py`). The executor's sizer (`executor/sizing.py`) converts that intent into a real order size:

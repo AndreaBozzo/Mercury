@@ -6,7 +6,10 @@ services:
     ports:
       - "4222:4222"
       - "8222:8222"
-    command: ["-js"] # Enable JetStream
+    # JetStream needs an on-disk store to survive container restarts.
+    command: ["-js", "-sd", "/data"]
+    volumes:
+      - nats-data:/data
 
   brain:
     build:
@@ -27,3 +30,23 @@ services:
       - .env
     depends_on:
       - nats
+
+  plutarch:
+    build:
+      context: .
+      dockerfile: plutarch/Dockerfile
+    environment:
+      - NATS_URL=nats://nats:4222
+      - PLUTARCH_DATA_DIR=/data/history
+      - PLUTARCH_QUARANTINE_DIR=/data/quarantine
+      - PLUTARCH_HTTP_HOST=0.0.0.0
+    ports:
+      - "9110:9110"
+    volumes:
+      - plutarch-data:/data
+    depends_on:
+      - nats
+
+volumes:
+  nats-data:
+  plutarch-data:

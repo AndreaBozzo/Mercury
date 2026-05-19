@@ -26,6 +26,7 @@ P&L simulation:
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -34,6 +35,31 @@ from typing import Any
 from core.schemas import MarketEvent, TradeSignal
 
 logger = logging.getLogger("backtesting")
+
+
+def _payload_from_row(row: Any) -> dict[str, Any]:
+    """Reconstruct the original MarketEvent.payload dict from a Lance row.
+
+    Plutarch (post-2026-05-19) writes the inner payload as a JSON string in
+    `payload_json`. For legacy datasets (mixed-schema flat columns), fall back
+    to the old behaviour: collect non-underscore non-null columns minus the
+    envelope fields, treating those as the payload.
+    """
+    payload_json = row.get("payload_json") if hasattr(row, "get") else None
+    if isinstance(payload_json, str) and payload_json:
+        try:
+            decoded = json.loads(payload_json)
+            if isinstance(decoded, dict):
+                return decoded
+        except ValueError:
+            pass
+
+    envelope_keys = {"source", "type", "timestamp", "seq", "payload_json"}
+    return {
+        k: v
+        for k, v in row.items()
+        if not k.startswith("_") and k not in envelope_keys and v is not None
+    }
 
 
 @dataclass
@@ -133,7 +159,7 @@ class BacktestEngine:
         for arrow_batch in ds.to_batches(batch_size=batch_size):
             df = arrow_batch.to_pandas()
             for _, row in df.iterrows():
-                payload = {k: v for k, v in row.items() if not k.startswith("_") and v is not None}
+                payload = _payload_from_row(row)
                 try:
                     event = MarketEvent(
                         source=str(row.get("source", "archive")),

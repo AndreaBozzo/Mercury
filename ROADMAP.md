@@ -43,6 +43,13 @@ Live deposit confirmed at 9 EUR; `MAX_NOTIONAL_EUR` default raised from 2.0 to 5
 - `executor/sizing.py` MVP: reads `available_balance` + `vol_modulator` + inline `fetch_ticker`, caches Binance min-notional, returns a typed `SizingDecision` with explicit skip reasons.
 - Sizer wired into `executor/main.py` between `check_risk` and `execute_trade`. `DRY_RUN` bypasses it; live mode acks and records `skipped_<reason>` on rejection.
 
+**Plutarch hardening (M2 work pulled forward, 2026-05-19)** — review surfaced three critical bugs that would make live-incident post-mortems impossible:
+- Ack-before-write replaced with ack-after-flush. SIGKILL between ack and Lance commit no longer creates silent data gaps.
+- Periodic flush every `PLUTARCH_FLUSH_INTERVAL_SEC` (default 30s) in addition to batch-size (default 500). Quarantine-NDJSON fallback when Lance writes fail — consumer never wedges on a poison batch.
+- Fixed Arrow schema (`source, type, timestamp, seq, payload_json, _subject, _archived_at_ns`). The inner payload is JSON-encoded so mixed event types (trade + l2_snapshot) no longer drift the schema. Backtester (`backtesting/engine.py:_payload_from_row`) decodes both new and legacy rows.
+- Pull-consumer for natural backpressure. `/healthz` + `/metrics` on port 9110. Dockerfile + docker-compose entry with `plutarch-data` and `nats-data` volumes (NATS JetStream now persists to disk too — previously in-memory only).
+- 5 regression tests in [tests/test_plutarch.py](tests/test_plutarch.py) covering ack ordering, quarantine path, schema drift, payload round-trip, and envelope-missing-fields.
+
 **Week 2 — next**
 - `brain/risk/volatility_modulator.py` as a coroutine task spawned by `brain/main.py`. Rolling stdev → multiplier ∈ [0, 1] published to `vol_modulator` KV.
 - Flip `SIZING_REQUIRE_VOL_MODULATOR=true` once the modulator is running.

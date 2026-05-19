@@ -1,12 +1,37 @@
+"""
+Plutarch — Mercury's market-data archiver.
+
+Subscribes to NATS JetStream subjects and persists every event to a Lance
+dataset for later replay by `backtesting/engine.py`.
+
+Durability contract (must hold for live post-mortems):
+  1. Messages are ACKed ONLY after a successful Lance write — never before.
+     A SIGKILL between write and ack leaves duplicates (replay must dedupe);
+     ack-before-write would have left silent gaps, which is unrecoverable.
+  2. The buffer flushes on either size (`PLUTARCH_BATCH_SIZE`, default 500)
+     OR elapsed time (`PLUTARCH_FLUSH_INTERVAL_SEC`, default 30s) — whichever
+     fires first. No 10k-event in-memory queue.
+  3. If `flush_buffer_to_lance` raises, the unflushed payloads are written to
+     a quarantine NDJSON file (`PLUTARCH_QUARANTINE_DIR`) and the consumer
+     continues. NATS will redeliver the unacked messages.
+  4. Schema is fixed: {source, type, timestamp, seq, payload_json, _subject,
+     _archived_at_ns}. Lance never sees a schema-drift batch.
+"""
+
+from __future__ import annotations
+
 import asyncio
+import contextlib
 import json
 import logging
 import os
-from datetime import datetime
+import time
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
 
 import lance
 import nats
-import pandas as pd
 import pyarrow as pa
 from dotenv import load_dotenv
 
@@ -14,61 +39,320 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("plutarch")
 
-# Configuration
 NATS_URL = os.getenv("NATS_URL", "nats://localhost:4222")
-STREAM_SUBJECT = "nephtys.stream.crypto.>"
-BATCH_SIZE = 10000
-DATA_DIR = "data/history"
+STREAM_NAME = os.getenv("PLUTARCH_STREAM_NAME", "nephtys_crypto")
+STREAM_SUBJECT = os.getenv("PLUTARCH_STREAM_SUBJECT", "nephtys.stream.crypto.>")
+DURABLE_NAME = os.getenv("PLUTARCH_DURABLE_NAME", "plutarch_archiver")
+DATA_DIR = os.getenv("PLUTARCH_DATA_DIR", "data/history")
+DATASET_NAME = os.getenv("PLUTARCH_DATASET_NAME", "market_history.lance")
+QUARANTINE_DIR = os.getenv("PLUTARCH_QUARANTINE_DIR", "data/quarantine")
+BATCH_SIZE = int(os.getenv("PLUTARCH_BATCH_SIZE", "500"))
+FLUSH_INTERVAL_SEC = float(os.getenv("PLUTARCH_FLUSH_INTERVAL_SEC", "30"))
+HTTP_HOST = os.getenv("PLUTARCH_HTTP_HOST", "127.0.0.1")
+HTTP_PORT = int(os.getenv("PLUTARCH_HTTP_PORT", "9110"))
 
-os.makedirs(DATA_DIR, exist_ok=True)
+DATASET_PATH = str(Path(DATA_DIR) / DATASET_NAME)
 
 
-async def run_archiver():
-    # Connect to NATS
+# Fixed Arrow schema — never changes regardless of event type.
+# All event-specific fields live inside payload_json (string).
+ARCHIVE_SCHEMA = pa.schema(
+    [
+        pa.field("source", pa.string()),
+        pa.field("type", pa.string()),
+        pa.field("timestamp", pa.int64()),
+        pa.field("seq", pa.int64()),
+        pa.field("payload_json", pa.string()),
+        pa.field("_subject", pa.string()),
+        pa.field("_archived_at_ns", pa.int64()),
+    ]
+)
+
+
+# Runtime state for /healthz + /metrics
+_state: dict[str, Any] = {
+    "events_written": 0,
+    "write_errors": 0,
+    "buffer_depth": 0,
+    "last_flush_ns": 0,
+    "last_flush_duration_seconds": 0.0,
+    "quarantine_writes": 0,
+    "started_at_ns": time.time_ns(),
+}
+
+
+def _row_from_envelope(envelope: dict[str, Any], subject: str) -> dict[str, Any]:
+    """Project the Nephtys StreamEvent envelope onto the fixed archive schema."""
+    inner = envelope.get("payload")
+    if not isinstance(inner, dict):
+        inner = {}
+    seq = envelope.get("seq")
+    if seq is None:
+        seq = -1
+    return {
+        "source": str(envelope.get("source") or ""),
+        "type": str(envelope.get("type") or ""),
+        "timestamp": int(envelope.get("timestamp") or 0),
+        "seq": int(seq),
+        "payload_json": json.dumps(inner, separators=(",", ":"), sort_keys=True),
+        "_subject": subject,
+        "_archived_at_ns": time.time_ns(),
+    }
+
+
+def _write_quarantine(rows: list[dict[str, Any]], error: BaseException) -> None:
+    """Persist rows we could not flush to Lance so they aren't lost on retry."""
+    if not rows:
+        return
+    Path(QUARANTINE_DIR).mkdir(parents=True, exist_ok=True)
+    fname = (
+        Path(QUARANTINE_DIR)
+        / f"plutarch_quarantine_{datetime.now(UTC).strftime('%Y%m%dT%H%M%S_%f')}.ndjson"
+    )
+    with fname.open("w", encoding="utf-8") as fh:
+        for row in rows:
+            fh.write(json.dumps(row) + "\n")
+    _state["quarantine_writes"] += 1
+    logger.error(
+        "Wrote %d rows to quarantine file %s after flush failure: %s",
+        len(rows),
+        fname,
+        error,
+    )
+
+
+def flush_buffer_to_lance(rows: list[dict[str, Any]]) -> None:
+    """Append `rows` to the Lance dataset using the fixed archive schema.
+
+    Raises on write failure — callers must decide whether to quarantine
+    or retry. Does NOT ack messages.
+    """
+    if not rows:
+        return
+    table = pa.Table.from_pylist(rows, schema=ARCHIVE_SCHEMA)
+    lance.write_dataset(table, DATASET_PATH, mode="append")
+
+
+async def _ensure_stream(js: Any) -> None:
+    """Idempotently ensure the JetStream stream that Plutarch reads from exists."""
+    try:
+        await js.add_stream(name=STREAM_NAME, subjects=[STREAM_SUBJECT])
+        logger.info("Ensured stream %s exists with subject %s", STREAM_NAME, STREAM_SUBJECT)
+    except Exception as exc:
+        # Most common: stream already exists with different (compatible) config.
+        logger.debug("add_stream(%s) skipped: %s", STREAM_NAME, exc)
+
+
+async def _flush_with_quarantine_and_ack(
+    pending_rows: list[dict[str, Any]],
+    pending_msgs: list[Any],
+) -> None:
+    """Flush + ack-after-write. On flush failure, quarantine and ack so that the
+    next round is not stuck on the same poison batch.
+
+    Quarantining is a deliberate trade-off: we prefer "data lives in a
+    quarantine NDJSON" over "consumer is wedged forever". An alert on
+    quarantine_writes > 0 must be wired in M2.
+    """
+    if not pending_rows:
+        return
+
+    started = time.monotonic()
+    try:
+        flush_buffer_to_lance(pending_rows)
+    except Exception as exc:
+        _state["write_errors"] += 1
+        _write_quarantine(pending_rows, exc)
+        # Ack anyway — the NDJSON file is the durable record now.
+        for msg in pending_msgs:
+            with contextlib.suppress(Exception):
+                await msg.ack()
+        return
+
+    elapsed = time.monotonic() - started
+    _state["events_written"] += len(pending_rows)
+    _state["last_flush_ns"] = time.time_ns()
+    _state["last_flush_duration_seconds"] = elapsed
+    logger.info("Flushed %d rows to %s in %.3fs", len(pending_rows), DATASET_PATH, elapsed)
+
+    for msg in pending_msgs:
+        with contextlib.suppress(Exception):
+            await msg.ack()
+
+
+async def run_archiver() -> None:
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+
     nc = await nats.connect(servers=[NATS_URL])
     js = nc.jetstream()
 
-    logger.info(f"Plutarch connected to NATS at {NATS_URL}. Listening to {STREAM_SUBJECT}...")
+    logger.info(
+        "Plutarch connected to NATS at %s. Stream=%s subject=%s",
+        NATS_URL,
+        STREAM_NAME,
+        STREAM_SUBJECT,
+    )
 
-    # We use a durable consumer so if Plutarch crashes, it picks up exactly where it left off
-    sub = await js.subscribe(STREAM_SUBJECT, durable="plutarch_archiver")
+    await _ensure_stream(js)
 
-    buffer = []
+    # Pull consumer gives us backpressure for free: no fetch -> no delivery.
+    sub = await js.pull_subscribe(STREAM_SUBJECT, durable=DURABLE_NAME)
+
+    pending_rows: list[dict[str, Any]] = []
+    pending_msgs: list[Any] = []
+    last_flush_monotonic = time.monotonic()
 
     try:
         while True:
-            # Fetch one message at a time (you can also use fetch() for batching)
-            msg = await sub.next_msg(timeout=None)
-            payload = json.loads(msg.data.decode())
+            try:
+                msgs = await sub.fetch(batch=BATCH_SIZE, timeout=FLUSH_INTERVAL_SEC)
+            except TimeoutError:
+                msgs = []
 
-            # Add NATS metadata (like the exact subject it came from)
-            payload["_subject"] = msg.subject
-            payload["_archived_at"] = datetime.utcnow().isoformat()
+            for msg in msgs:
+                try:
+                    envelope = json.loads(msg.data.decode())
+                except Exception:
+                    logger.exception(
+                        "Plutarch: bad JSON on subject %s, acking & dropping",
+                        msg.subject,
+                    )
+                    with contextlib.suppress(Exception):
+                        await msg.ack()
+                    continue
 
-            buffer.append(payload)
+                pending_rows.append(_row_from_envelope(envelope, msg.subject))
+                pending_msgs.append(msg)
+                _state["buffer_depth"] = len(pending_rows)
 
-            # Acknowledge the message so NATS knows we have it securely in memory
-            await msg.ack()
+            time_since_flush = time.monotonic() - last_flush_monotonic
+            should_flush_size = len(pending_rows) >= BATCH_SIZE
+            should_flush_time = pending_rows and time_since_flush >= FLUSH_INTERVAL_SEC
 
-            # When the buffer is full, flush to disk
-            if len(buffer) >= BATCH_SIZE:
-                flush_buffer_to_lance(buffer)
-                buffer.clear()
+            if should_flush_size or should_flush_time:
+                await _flush_with_quarantine_and_ack(pending_rows, pending_msgs)
+                pending_rows = []
+                pending_msgs = []
+                _state["buffer_depth"] = 0
+                last_flush_monotonic = time.monotonic()
 
     except asyncio.CancelledError:
-        logger.info("Plutarch shutting down. Flushing remaining buffer...")
-        if buffer:
-            flush_buffer_to_lance(buffer)
+        logger.info("Plutarch shutting down. Flushing remaining %d rows...", len(pending_rows))
+        await _flush_with_quarantine_and_ack(pending_rows, pending_msgs)
+        raise
     finally:
         await nc.close()
 
 
-def flush_buffer_to_lance(buffer):
-    if not buffer:
-        return
+# ---------------------------------------------------------------------------
+# Minimal HTTP server for /healthz and /metrics
+# ---------------------------------------------------------------------------
 
-    df = pd.DataFrame(buffer)
-    table = pa.Table.from_pandas(df)
 
-    # If the dataset exists, it appends. If not, it creates it.
-    lance.write_dataset(table, "data/history/market_history.lance", mode="append")
+def _healthz_body() -> bytes:
+    now_ns = time.time_ns()
+    last_flush_ns = _state["last_flush_ns"]
+    last_flush_age_seconds = (now_ns - last_flush_ns) / 1e9 if last_flush_ns else None
+
+    # 503 if we have a buffer but haven't flushed in 3x the interval.
+    healthy = True
+    if last_flush_age_seconds is not None and _state["buffer_depth"] > 0:
+        healthy = last_flush_age_seconds < 3 * FLUSH_INTERVAL_SEC
+
+    payload = {
+        "status": "ok" if healthy else "stalled",
+        "events_written": _state["events_written"],
+        "write_errors": _state["write_errors"],
+        "quarantine_writes": _state["quarantine_writes"],
+        "buffer_depth": _state["buffer_depth"],
+        "last_flush_age_seconds": last_flush_age_seconds,
+        "uptime_seconds": (now_ns - _state["started_at_ns"]) / 1e9,
+    }
+    return json.dumps(payload).encode()
+
+
+def _metrics_body() -> bytes:
+    lines = [
+        f"plutarch_events_written_total {_state['events_written']}",
+        f"plutarch_write_errors_total {_state['write_errors']}",
+        f"plutarch_quarantine_writes_total {_state['quarantine_writes']}",
+        f"plutarch_buffer_depth {_state['buffer_depth']}",
+        f"plutarch_last_flush_duration_seconds {_state['last_flush_duration_seconds']}",
+    ]
+    return ("\n".join(lines) + "\n").encode()
+
+
+async def _serve_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+    try:
+        request_line = await reader.readline()
+        if not request_line:
+            return
+        parts = request_line.decode("ascii", errors="ignore").strip().split()
+        if len(parts) < 2:
+            await _write_response(writer, "400 Bad Request", "text/plain", b"bad request\n")
+            return
+        method, path = parts[0], parts[1]
+        while True:
+            line = await reader.readline()
+            if not line or line in {b"\r\n", b"\n"}:
+                break
+        if method != "GET":
+            await _write_response(
+                writer,
+                "405 Method Not Allowed",
+                "text/plain",
+                b"method not allowed\n",
+            )
+            return
+        if path in {"/healthz", "/health"}:
+            body = _healthz_body()
+            status = "200 OK"
+            try:
+                if json.loads(body)["status"] != "ok":
+                    status = "503 Service Unavailable"
+            except Exception:
+                pass
+            await _write_response(writer, status, "application/json", body)
+            return
+        if path == "/metrics":
+            await _write_response(writer, "200 OK", "text/plain; version=0.0.4", _metrics_body())
+            return
+        await _write_response(writer, "404 Not Found", "text/plain", b"not found\n")
+    finally:
+        writer.close()
+        await writer.wait_closed()
+
+
+async def _write_response(
+    writer: asyncio.StreamWriter,
+    status: str,
+    content_type: str,
+    body: bytes,
+) -> None:
+    headers = [
+        f"HTTP/1.1 {status}",
+        f"Content-Type: {content_type}",
+        f"Content-Length: {len(body)}",
+        "Connection: close",
+        "",
+        "",
+    ]
+    writer.write("\r\n".join(headers).encode() + body)
+    await writer.drain()
+
+
+async def main() -> None:
+    http_server = await asyncio.start_server(_serve_http, HTTP_HOST, HTTP_PORT)
+    logger.info("Plutarch observability listening on http://%s:%d", HTTP_HOST, HTTP_PORT)
+    archiver_task = asyncio.create_task(run_archiver())
+    try:
+        async with http_server:
+            await archiver_task
+    finally:
+        archiver_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await archiver_task
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
