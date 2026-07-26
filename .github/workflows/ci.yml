@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [master]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
@@ -16,18 +19,20 @@ jobs:
     timeout-minutes: 15
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Install uv
-        uses: astral-sh/setup-uv@v3
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
         with:
           enable-cache: true
+          version: "0.11.32"
 
       - name: Set up Python
-        run: uv python install 3.11
+        run: uv python install
 
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --locked
 
       - name: Lint (ruff check)
         run: uv run ruff check .
@@ -35,5 +40,17 @@ jobs:
       - name: Format check (ruff format)
         run: uv run ruff format --check .
 
+      - name: Type check
+        run: uv run mypy core brain executor plutarch backtesting
+
       - name: Run tests
         run: uv run pytest
+
+      - name: Build distributions
+        run: uv build
+
+      - name: Audit locked runtime dependencies
+        run: |
+          uv export --frozen --no-dev --no-hashes --format requirements-txt \
+            --output-file .audit-requirements.txt
+          uv run pip-audit --requirement .audit-requirements.txt

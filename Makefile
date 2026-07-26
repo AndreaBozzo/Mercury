@@ -1,4 +1,4 @@
-.PHONY: help install test lint fmt fmt-check typecheck check run-brain run-executor run-archiver provision clean
+.PHONY: help install test lint fmt fmt-check typecheck audit build check run-brain run-executor run-archiver provision clean
 
 help:
 	@echo "Mercury — common development tasks"
@@ -8,8 +8,10 @@ help:
 	@echo "  make lint          Ruff lint check"
 	@echo "  make fmt           Ruff format (writes changes)"
 	@echo "  make fmt-check     Ruff format check (no writes)"
-	@echo "  make typecheck     Mypy on core/brain/executor/plutarch (best-effort)"
-	@echo "  make check         lint + fmt-check + test (what CI runs)"
+	@echo "  make typecheck     Mypy on all runtime packages"
+	@echo "  make audit         Audit the active environment for known vulnerabilities"
+	@echo "  make build         Build source and wheel distributions"
+	@echo "  make check         lint + format + types + tests + audit + build"
 	@echo ""
 	@echo "  make run-brain     Start the brain service"
 	@echo "  make run-executor  Start the executor service"
@@ -33,9 +35,15 @@ fmt-check:
 	uv run ruff format --check .
 
 typecheck:
-	uv run mypy core brain executor plutarch || true
+	uv run mypy core brain executor plutarch backtesting
 
-check: lint fmt-check test
+audit:
+	uv run pip-audit
+
+build:
+	uv build
+
+check: lint fmt-check typecheck test audit build
 
 run-brain:
 	uv run python -m brain.main
