@@ -171,7 +171,7 @@ experimental until its acknowledgement and publication semantics match the durab
 |---|---|---|---|---|
 | PL-01 | High | Valid JSON with an invalid timestamp/sequence can escape row conversion and crash the consumer. | JSON parsing succeeds, then unchecked coercion raises outside the poison handling boundary. | Validate the full envelope and quarantine the individual message. |
 | PL-02 | High | Malformed JSON is acknowledged and dropped rather than quarantined. | The evidence needed to diagnose an upstream regression is lost. | Persist raw bytes plus subject/error metadata before ack. |
-| PL-03 | Medium | Health can look healthy forever before the first flush. | `last_flush_ns == 0` does not distinguish startup/no data from a stalled writer. | Expose readiness separately and track last receive/attempt/success times. |
+| PL-03 | Medium | Health could look healthy forever before the first flush. | `last_flush_ns == 0` did not distinguish startup/no data from a stalled first buffer. | **Resolved during review:** health and metrics track the oldest buffered-event age independently of flush history. |
 | PL-04 | Medium | Consumer limits and ack-pending headroom are implicit. | A higher-rate feed can exhaust pending delivery capacity without a useful early signal. | Configure limits and export pending/redelivery/lag metrics. |
 | PL-05 | Medium | Lance compaction and retention are not operated. | Fragment/version growth will degrade scans and grow storage. | Add an explicit offline/admin maintenance command and retention policy. |
 | PL-06 | Medium | Quarantine writes have no external alert. | The service can remain nominally running while all new data is diverted. | Alert on first occurrence and sustained rate; document recovery. |

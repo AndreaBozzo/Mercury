@@ -37,6 +37,7 @@ import lance
 import nats
 import pyarrow as pa
 from dotenv import load_dotenv
+from nats.js.errors import NotFoundError
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -44,7 +45,7 @@ logger = logging.getLogger("plutarch")
 
 NATS_URL = os.getenv("NATS_URL", "nats://localhost:4222")
 STREAM_NAME = os.getenv("PLUTARCH_STREAM_NAME", "nephtys_crypto")
-STREAM_SUBJECT = os.getenv("PLUTARCH_STREAM_SUBJECT", "nephtys.stream.crypto.>")
+STREAM_SUBJECT = os.getenv("PLUTARCH_STREAM_SUBJECT", "nephtys.stream.crypto.*")
 DURABLE_NAME = os.getenv("PLUTARCH_DURABLE_NAME", "plutarch_archiver")
 DATA_DIR = os.getenv("PLUTARCH_DATA_DIR", "data/history")
 DATASET_NAME = os.getenv("PLUTARCH_DATASET_NAME", "market_history.lance")
@@ -77,6 +78,7 @@ _state: dict[str, Any] = {
     "events_written": 0,
     "write_errors": 0,
     "buffer_depth": 0,
+    "buffer_started_ns": 0,
     "last_flush_ns": 0,
     "last_flush_duration_seconds": 0.0,
     "quarantine_writes": 0,
@@ -192,13 +194,42 @@ def flush_buffer_to_lance(rows: list[dict[str, Any]]) -> None:
 
 
 async def _ensure_stream(js: Any) -> None:
-    """Idempotently ensure the JetStream stream that Plutarch reads from exists."""
+    """Create the stream if absent and reject incompatible existing subjects."""
     try:
+        info = await js.stream_info(STREAM_NAME)
+    except NotFoundError:
         await js.add_stream(name=STREAM_NAME, subjects=[STREAM_SUBJECT])
         logger.info("Ensured stream %s exists with subject %s", STREAM_NAME, STREAM_SUBJECT)
-    except Exception as exc:
-        # Most common: stream already exists with different (compatible) config.
-        logger.debug("add_stream(%s) skipped: %s", STREAM_NAME, exc)
+        return
+
+    configured_subjects = tuple(info.config.subjects or ())
+    if not any(
+        _stream_subject_covers(configured, STREAM_SUBJECT) for configured in configured_subjects
+    ):
+        raise RuntimeError(
+            f"JetStream stream {STREAM_NAME!r} subjects {configured_subjects!r} "
+            f"do not cover Plutarch subject {STREAM_SUBJECT!r}"
+        )
+
+
+def _stream_subject_covers(configured: str, desired: str) -> bool:
+    """Return whether one NATS subject pattern contains the desired pattern."""
+    configured_tokens = configured.split(".")
+    desired_tokens = desired.split(".")
+    index = 0
+    while index < len(configured_tokens):
+        configured_token = configured_tokens[index]
+        if configured_token == ">":
+            return True
+        if index >= len(desired_tokens):
+            return False
+        desired_token = desired_tokens[index]
+        if desired_token == ">":
+            return configured_token == ">"
+        if configured_token != "*" and configured_token != desired_token:
+            return False
+        index += 1
+    return index == len(desired_tokens)
 
 
 async def _flush_with_quarantine_and_ack(
@@ -272,6 +303,8 @@ async def run_archiver() -> None:
                 if row is None:
                     continue
 
+                if not pending_rows:
+                    _state["buffer_started_ns"] = time.time_ns()
                 pending_rows.append(row)
                 pending_msgs.append(msg)
                 _state["buffer_depth"] = len(pending_rows)
@@ -285,6 +318,7 @@ async def run_archiver() -> None:
                 pending_rows = []
                 pending_msgs = []
                 _state["buffer_depth"] = 0
+                _state["buffer_started_ns"] = 0
                 last_flush_monotonic = time.monotonic()
 
     except asyncio.CancelledError:
@@ -304,11 +338,15 @@ def _healthz_body() -> bytes:
     now_ns = time.time_ns()
     last_flush_ns = _state["last_flush_ns"]
     last_flush_age_seconds = (now_ns - last_flush_ns) / 1e9 if last_flush_ns else None
+    buffer_started_ns = _state["buffer_started_ns"]
+    buffer_age_seconds = (
+        max(0.0, (now_ns - buffer_started_ns) / 1e9)
+        if _state["buffer_depth"] > 0 and buffer_started_ns
+        else None
+    )
 
-    # 503 if we have a buffer but haven't flushed in 3x the interval.
-    healthy = True
-    if last_flush_age_seconds is not None and _state["buffer_depth"] > 0:
-        healthy = last_flush_age_seconds < 3 * FLUSH_INTERVAL_SEC
+    # This works before the first successful flush as well as after it.
+    healthy = buffer_age_seconds is None or buffer_age_seconds < 3 * FLUSH_INTERVAL_SEC
 
     payload = {
         "status": "ok" if healthy else "stalled",
@@ -317,6 +355,7 @@ def _healthz_body() -> bytes:
         "quarantine_writes": _state["quarantine_writes"],
         "invalid_messages": _state["invalid_messages"],
         "buffer_depth": _state["buffer_depth"],
+        "buffer_age_seconds": buffer_age_seconds,
         "last_flush_age_seconds": last_flush_age_seconds,
         "uptime_seconds": (now_ns - _state["started_at_ns"]) / 1e9,
     }
@@ -324,12 +363,20 @@ def _healthz_body() -> bytes:
 
 
 def _metrics_body() -> bytes:
+    now_ns = time.time_ns()
+    buffer_started_ns = _state["buffer_started_ns"]
+    buffer_age_seconds = (
+        max(0.0, (now_ns - buffer_started_ns) / 1e9)
+        if _state["buffer_depth"] > 0 and buffer_started_ns
+        else 0.0
+    )
     lines = [
         f"plutarch_events_written_total {_state['events_written']}",
         f"plutarch_write_errors_total {_state['write_errors']}",
         f"plutarch_quarantine_writes_total {_state['quarantine_writes']}",
         f"plutarch_invalid_messages_total {_state['invalid_messages']}",
         f"plutarch_buffer_depth {_state['buffer_depth']}",
+        f"plutarch_buffer_oldest_age_seconds {buffer_age_seconds}",
         f"plutarch_last_flush_duration_seconds {_state['last_flush_duration_seconds']}",
     ]
     return ("\n".join(lines) + "\n").encode()

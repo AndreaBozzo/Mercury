@@ -31,7 +31,7 @@ TradeSignal -> Executor observe mode -> recorded decision, no exchange client or
 - [ ] Exercise the documented quickstart against a clean environment.
 - [ ] Add a small deterministic end-to-end observation smoke test.
 - [ ] Define a stable event-envelope compatibility/version policy with Nephtys.
-- [ ] Quarantine malformed-but-valid JSON in Plutarch without crashing the consumer.
+- [x] Quarantine malformed events in Plutarch without crashing or acknowledging before evidence.
 
 No alpha acceptance item requires sandbox or live trading.
 

@@ -16,9 +16,11 @@ from __future__ import annotations
 import base64
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from nats.js.errors import NotFoundError
 
 from backtesting.engine import _payload_from_row
 
@@ -37,6 +39,7 @@ def _isolate_state(tmp_path, monkeypatch):
         events_written=0,
         write_errors=0,
         buffer_depth=0,
+        buffer_started_ns=0,
         last_flush_ns=0,
         last_flush_duration_seconds=0.0,
         quarantine_writes=0,
@@ -264,3 +267,96 @@ async def test_invalid_message_remains_unacked_if_quarantine_fails(monkeypatch):
     assert msg.ack_count == 0
     assert archiver._state["invalid_messages"] == 0
     assert archiver._state["write_errors"] == 1
+
+
+def test_health_detects_stalled_buffer_before_first_flush(monkeypatch):
+    from plutarch import archiver
+
+    monkeypatch.setattr(archiver, "FLUSH_INTERVAL_SEC", 10.0)
+    archiver._state.update(
+        buffer_depth=1,
+        buffer_started_ns=archiver.time.time_ns() - 31_000_000_000,
+        last_flush_ns=0,
+    )
+
+    payload = json.loads(archiver._healthz_body())
+
+    assert payload["status"] == "stalled"
+    assert payload["last_flush_age_seconds"] is None
+    assert payload["buffer_age_seconds"] >= 31.0
+    assert "plutarch_buffer_oldest_age_seconds" in archiver._metrics_body().decode()
+
+
+def test_health_accepts_fresh_buffer_before_first_flush(monkeypatch):
+    from plutarch import archiver
+
+    monkeypatch.setattr(archiver, "FLUSH_INTERVAL_SEC", 10.0)
+    archiver._state.update(
+        buffer_depth=1,
+        buffer_started_ns=archiver.time.time_ns(),
+        last_flush_ns=0,
+    )
+
+    payload = json.loads(archiver._healthz_body())
+
+    assert payload["status"] == "ok"
+
+
+@pytest.mark.asyncio
+async def test_ensure_stream_creates_only_when_absent():
+    from plutarch import archiver
+
+    class FakeJetStream:
+        def __init__(self):
+            self.added: list[dict[str, Any]] = []
+
+        async def stream_info(self, _name):
+            raise NotFoundError()
+
+        async def add_stream(self, **kwargs):
+            self.added.append(kwargs)
+
+    js = FakeJetStream()
+    await archiver._ensure_stream(js)
+
+    assert js.added == [
+        {
+            "name": archiver.STREAM_NAME,
+            "subjects": [archiver.STREAM_SUBJECT],
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_ensure_stream_accepts_covering_existing_subject():
+    from plutarch import archiver
+
+    class FakeJetStream:
+        async def stream_info(self, _name):
+            return SimpleNamespace(config=SimpleNamespace(subjects=["nephtys.stream.crypto.>"]))
+
+    await archiver._ensure_stream(FakeJetStream())
+
+
+@pytest.mark.asyncio
+async def test_ensure_stream_rejects_incompatible_existing_subject():
+    from plutarch import archiver
+
+    class FakeJetStream:
+        async def stream_info(self, _name):
+            return SimpleNamespace(config=SimpleNamespace(subjects=["unrelated.>"]))
+
+    with pytest.raises(RuntimeError, match="do not cover"):
+        await archiver._ensure_stream(FakeJetStream())
+
+
+@pytest.mark.asyncio
+async def test_ensure_stream_does_not_hide_transport_failure():
+    from plutarch import archiver
+
+    class FakeJetStream:
+        async def stream_info(self, _name):
+            raise ConnectionError("NATS unavailable")
+
+    with pytest.raises(ConnectionError, match="NATS unavailable"):
+        await archiver._ensure_stream(FakeJetStream())
