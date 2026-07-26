@@ -2,6 +2,7 @@
 
 import json
 from datetime import UTC, datetime, timedelta
+from typing import Literal
 
 import pytest
 
@@ -14,11 +15,16 @@ from executor.sizing import (
 )
 
 
-def make_signal(confidence: float = 0.8) -> TradeSignal:
+def make_signal(
+    confidence: float = 0.8,
+    *,
+    action: Literal["BUY", "SELL"] = "BUY",
+    symbol: str = "BTC/EUR",
+) -> TradeSignal:
     return TradeSignal(
         strategy_id="test",
-        symbol="BTC/USDT",
-        action="BUY",
+        symbol=symbol,
+        action=action,
         order_type="MARKET",
         quantity=INTENT_PLACEHOLDER_QTY,
         price=49000.0,  # stale strategy-supplied price
@@ -54,10 +60,16 @@ class FakeJetStream:
         return self.kv
 
 
-def _fresh_balance_payload(eur: float = 9.0, usdt: float = 100.0) -> bytes:
+def _fresh_balance_payload(
+    eur: float = 100.0,
+    *,
+    btc: float = 0.5,
+    usdt: float = 100.0,
+) -> bytes:
     return json.dumps(
         {
             "quote_free": {"EUR": eur, "USDT": usdt},
+            "asset_free": {"BTC": btc, "EUR": eur, "USDT": usdt},
             "computed_at": datetime.now(UTC).isoformat(),
         }
     ).encode()
@@ -87,7 +99,7 @@ async def test_sizer_skips_when_min_notional_unavailable(monkeypatch):
     """Fix #2 regression: sizer must fail CLOSED when _load_min_cost returns None."""
     kv = FakeKV(
         {
-            AVAILABLE_BALANCE_KEY: _fresh_balance_payload(usdt=100.0),
+            AVAILABLE_BALANCE_KEY: _fresh_balance_payload(eur=100.0),
             VOL_MODULATOR_KEY: _fresh_modulator_payload(),
         }
     )
@@ -113,7 +125,7 @@ async def test_sized_signal_carries_mark_price(monkeypatch):
     """Fix #8 regression: sized signal must use mark_price (not strategy's stale price)."""
     kv = FakeKV(
         {
-            AVAILABLE_BALANCE_KEY: _fresh_balance_payload(usdt=1000.0),
+            AVAILABLE_BALANCE_KEY: _fresh_balance_payload(eur=1000.0),
             VOL_MODULATOR_KEY: _fresh_modulator_payload(),
         }
     )
@@ -128,8 +140,7 @@ async def test_sized_signal_carries_mark_price(monkeypatch):
 
     monkeypatch.setattr(sizing, "_fetch_mark_price", fake_mark_price)
     monkeypatch.setattr(sizing, "_load_min_cost", fake_min_cost)
-    monkeypatch.setattr(sizing, "MAX_NOTIONAL_EUR", 5.5)
-    monkeypatch.setattr(sizing, "RISK_EUR_PER_QUOTE", 0.92)
+    monkeypatch.setattr(sizing, "MAX_NOTIONAL_EUR", 5.0)
 
     signal = make_signal(confidence=0.8)
     decision = await size_signal(signal, js)
@@ -171,3 +182,81 @@ async def test_sizer_skips_when_balance_missing(monkeypatch):
 
     assert decision.sized_signal is None
     assert decision.reason == "balance_missing"
+
+
+@pytest.mark.asyncio
+async def test_sell_is_sized_from_free_base_inventory(monkeypatch):
+    kv = FakeKV(
+        {
+            AVAILABLE_BALANCE_KEY: _fresh_balance_payload(eur=0.0, btc=0.5),
+            VOL_MODULATOR_KEY: _fresh_modulator_payload(),
+        }
+    )
+    js = FakeJetStream(kv)
+
+    async def fake_mark_price(_symbol):
+        return 100.0
+
+    async def fake_min_cost(_symbol):
+        return 1.0
+
+    monkeypatch.setattr(sizing, "_fetch_mark_price", fake_mark_price)
+    monkeypatch.setattr(sizing, "_load_min_cost", fake_min_cost)
+    monkeypatch.setattr(sizing, "MAX_NOTIONAL_EUR", 1_000.0)
+
+    decision = await size_signal(make_signal(action="SELL", confidence=0.8), js)
+
+    assert decision.sized_signal is not None
+    assert decision.sized_signal.quantity == pytest.approx(0.1)
+    assert decision.target_notional_quote == pytest.approx(10.0)
+
+
+@pytest.mark.asyncio
+async def test_sell_fails_closed_without_free_base_inventory():
+    kv = FakeKV(
+        {
+            AVAILABLE_BALANCE_KEY: _fresh_balance_payload(eur=1_000.0, btc=0.0),
+            VOL_MODULATOR_KEY: _fresh_modulator_payload(),
+        }
+    )
+
+    decision = await size_signal(
+        make_signal(action="SELL"),
+        FakeJetStream(kv),
+    )
+
+    assert decision.sized_signal is None
+    assert decision.reason == "balance_zero"
+
+
+@pytest.mark.asyncio
+async def test_non_eur_quote_is_rejected_before_exchange_or_balance_access():
+    decision = await size_signal(
+        make_signal(symbol="BTC/USDT"),
+        FakeJetStream(FakeKV()),
+    )
+
+    assert decision.sized_signal is None
+    assert decision.reason == "invalid_quote"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+async def test_non_finite_balance_state_fails_closed(value):
+    kv = FakeKV(
+        {
+            AVAILABLE_BALANCE_KEY: _fresh_balance_payload(eur=value),
+            VOL_MODULATOR_KEY: _fresh_modulator_payload(),
+        }
+    )
+
+    decision = await size_signal(make_signal(), FakeJetStream(kv))
+
+    assert decision.sized_signal is None
+    assert decision.reason == "balance_missing"
+
+
+def test_invalid_or_future_state_timestamp_is_stale():
+    assert sizing._is_stale(123, 60) is True
+    future = (datetime.now(UTC) + timedelta(minutes=1)).isoformat()
+    assert sizing._is_stale(future, 60) is True

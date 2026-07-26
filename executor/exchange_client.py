@@ -3,6 +3,7 @@ import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
+from math import isfinite
 from typing import Any, Literal, cast
 
 import ccxt.async_support as ccxt
@@ -49,7 +50,8 @@ class PortfolioSnapshot:
     symbols: dict[str, SymbolPortfolioState]
     current_exposure: float
     position_pnl: float
-    quote_free: dict[str, float]  # cash balance per quote asset (e.g. {"EUR": 9.0, "USDT": 0.0})
+    quote_free: dict[str, float]
+    asset_free: dict[str, float]
 
 
 @dataclass(frozen=True)
@@ -178,6 +180,18 @@ def _quote_assets_from_symbols(symbols: list[str]) -> list[str]:
     return quotes
 
 
+def _assets_from_symbols(symbols: list[str]) -> list[str]:
+    assets: list[str] = []
+    seen: set[str] = set()
+    for raw_symbol in symbols:
+        base, quote = split_symbol(normalize_symbol(raw_symbol))
+        for asset in (base, quote):
+            if asset and asset not in seen:
+                seen.add(asset)
+                assets.append(asset)
+    return assets
+
+
 def _balance_free(balance: dict[str, Any], asset: str) -> float:
     free_bucket = balance.get("free")
     if isinstance(free_bucket, dict):
@@ -221,12 +235,16 @@ async def fetch_portfolio_snapshot(
         quote_free = {
             asset: _balance_free(balance, asset) for asset in _quote_assets_from_symbols(symbols)
         }
+        asset_free = {
+            asset: _balance_free(balance, asset) for asset in _assets_from_symbols(symbols)
+        }
 
         return PortfolioSnapshot(
             symbols=symbol_states,
             current_exposure=current_exposure,
             position_pnl=position_pnl,
             quote_free=quote_free,
+            asset_free=asset_free,
         )
     finally:
         await exchange.close()
@@ -254,9 +272,10 @@ def _as_float(value: Any) -> float | None:
     try:
         if value is None:
             return None
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if isfinite(number) else None
 
 
 async def _confirm_order_fill(
@@ -378,13 +397,11 @@ def _balance_total(balance: dict[str, Any], asset: str) -> float:
 
 
 def _ticker_price(ticker: dict[str, Any]) -> float:
-    return (
-        _as_float(ticker.get("last"))
-        or _as_float(ticker.get("close"))
-        or _as_float(ticker.get("bid"))
-        or _as_float(ticker.get("ask"))
-        or 0.0
-    )
+    for field in ("last", "close", "bid", "ask"):
+        price = _as_float(ticker.get(field))
+        if price is not None and price > 0:
+            return price
+    raise RuntimeError("Exchange ticker did not contain a positive finite mark price")
 
 
 async def _cost_basis_from_exchange_trades(

@@ -138,12 +138,12 @@ Severity means:
 |---|---|---|---|---|
 | EX-01 | Critical | Live submission is not idempotent across redelivery. | An order may reach the venue before result/KV update/ack. JetStream can redeliver and submit again. | Block supported live use; add a durable execution journal, client-order IDs, and ambiguous-state reconciliation. |
 | EX-02 | Critical | Exposure check/update is not an atomic reservation. | Concurrent signal handlers can read the same exposure and both pass the cap. | Reserve risk atomically before submission and settle against fills. |
-| EX-03 | High | SELL sizing uses quote-cash logic rather than authoritative free base inventory. | A SELL can be sized from the wrong asset and then reject or overstate executability. | Store per-asset free balances and implement side-aware sizing before sandbox acceptance. |
+| EX-03 | High | SELL sizing used quote-cash logic rather than authoritative free base inventory. | A SELL could be sized from the wrong asset and then reject or overstate executability. | **Resolved during review:** snapshots now publish per-asset free balances and sizing is side-aware. |
 | EX-04 | High | Cost-basis history can be incomplete. | Initial pagination may stop once early net quantity reaches the present balance, missing later sell/re-buy cycles. | Reconstruct from complete bounded history or persist a fill ledger. |
 | EX-05 | High | Incremental fill cursor can skip trades. | `last_timestamp + 1` loses fills sharing the same millisecond. | Cursor by exchange trade ID plus timestamp, with overlap and deduplication. |
 | EX-06 | High | Venue result ambiguity is collapsed into generic failure. | A timeout after submission is not equivalent to a rejected order. Blind retry is unsafe. | Model submitted/accepted/partial/filled/rejected/unknown states explicitly. |
 | EX-07 | Medium | “Dollar” exposure names actually hold quote-currency values. | EUR and non-EUR quotes can be combined or displayed incorrectly. | Use typed currency amounts and currency-specific metrics/limits. |
-| EX-08 | Medium | `RISK_EUR_PER_QUOTE` is one static scalar. | It is not valid for arbitrary quote currencies and can become stale. | Restrict execution to EUR quote or add a timestamped conversion service. |
+| EX-08 | Medium | `RISK_EUR_PER_QUOTE` was one static scalar. | It was not valid for arbitrary quote currencies and could become stale. | **Resolved for alpha:** sandbox sizing rejects non-EUR quote symbols pending a timestamped FX service. |
 | EX-09 | Medium | Exchange metadata/market minimum caching needs explicit freshness behavior. | Stale precision or minimum cost can cause avoidable rejects. | Long-lived client, positive/negative cache policy, expiry, and retry limits. |
 | EX-10 | Medium | Risk-limit state has no enforced freshness contract. | A previously safe dynamic limit can remain active after its producer dies. | Timestamp, validate, and fail closed on stale dynamic state. |
 

@@ -11,7 +11,10 @@ class FakeExchange:
         self.calls: list[tuple[str, int | None, int, dict | None]] = []
 
     async def fetch_balance(self):
-        return {"total": {"BTC": 0.5, "USDT": 1000.0}}
+        return {
+            "free": {"BTC": 0.4, "USDT": 1000.0},
+            "total": {"BTC": 0.5, "USDT": 1000.0},
+        }
 
     async def fetch_ticker(self, symbol: str):
         assert symbol == "BTC/USDT"
@@ -51,6 +54,8 @@ async def test_fetch_portfolio_snapshot_uses_exchange_state_for_exposure_and_pnl
     assert snapshot.symbols["BTC/USDT"].cost_basis == 50.0
     assert snapshot.symbols["BTC/USDT"].market_value == 60.0
     assert snapshot.symbols["BTC/USDT"].unrealized_pnl == 10.0
+    assert snapshot.quote_free == {"USDT": 1000.0}
+    assert snapshot.asset_free == {"BTC": 0.4, "USDT": 1000.0}
     assert exchange.calls == [("BTC/USDT", 0, 200, None)]
     assert exchange.closed is True
 
@@ -68,7 +73,10 @@ class PaginatedExchange(FakeExchange):
         }
 
     async def fetch_balance(self):
-        return {"total": {"BTC": 1.0, "USDT": 1000.0}}
+        return {
+            "free": {"BTC": 1.0, "USDT": 1000.0},
+            "total": {"BTC": 1.0, "USDT": 1000.0},
+        }
 
     async def fetch_my_trades(
         self,
@@ -99,7 +107,10 @@ async def test_fetch_portfolio_snapshot_pages_trade_history_for_carried_position
 
 class PersistedStateExchange(FakeExchange):
     async def fetch_balance(self):
-        return {"total": {"BTC": 0.999, "USDT": 1000.0}}
+        return {
+            "free": {"BTC": 0.999, "USDT": 1000.0},
+            "total": {"BTC": 0.999, "USDT": 1000.0},
+        }
 
     async def fetch_my_trades(
         self,
@@ -167,11 +178,13 @@ class FakeSnapshot:
         current_exposure: float,
         position_pnl: float,
         quote_free: dict[str, float] | None = None,
+        asset_free: dict[str, float] | None = None,
     ):
         self.current_exposure = current_exposure
         self.position_pnl = position_pnl
         self.symbols: dict[str, object] = {}
         self.quote_free = quote_free if quote_free is not None else {}
+        self.asset_free = asset_free if asset_free is not None else {}
 
 
 @pytest.mark.asyncio
@@ -189,6 +202,7 @@ async def test_refresh_runtime_state_uses_exchange_snapshot(monkeypatch):
             current_exposure=75.0,
             position_pnl=12.5,
             quote_free={"USDT": 100.0, "EUR": 9.0},
+            asset_free={"BTC": 0.25, "USDT": 100.0, "EUR": 9.0},
         )
 
     saved: list[float] = []
@@ -204,8 +218,14 @@ async def test_refresh_runtime_state_uses_exchange_snapshot(monkeypatch):
     async def fake_save_position_states(_js, states):
         saved_states.append(states)
 
-    async def fake_save_available_balance(_js, quote_free, computed_at_iso):
-        saved_balances.append({"quote_free": dict(quote_free), "computed_at": computed_at_iso})
+    async def fake_save_available_balance(_js, quote_free, asset_free, computed_at_iso):
+        saved_balances.append(
+            {
+                "quote_free": dict(quote_free),
+                "asset_free": dict(asset_free),
+                "computed_at": computed_at_iso,
+            }
+        )
 
     monkeypatch.setattr(executor_main, "fetch_portfolio_snapshot", fake_fetch_portfolio_snapshot)
     monkeypatch.setattr(executor_main, "load_position_states", fake_load_position_states)
@@ -221,4 +241,5 @@ async def test_refresh_runtime_state_uses_exchange_snapshot(monkeypatch):
     assert saved_states == [{}]
     assert len(saved_balances) == 1
     assert saved_balances[0]["quote_free"] == {"USDT": 100.0, "EUR": 9.0}
+    assert saved_balances[0]["asset_free"] == {"BTC": 0.25, "USDT": 100.0, "EUR": 9.0}
     assert saved_balances[0]["computed_at"]  # ISO timestamp present

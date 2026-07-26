@@ -78,6 +78,7 @@ async def _refresh_runtime_state(js) -> None:
     await save_available_balance(
         js,
         snapshot.quote_free,
+        snapshot.asset_free,
         datetime.now(UTC).isoformat(),
     )
     _set_current_exposure(snapshot.current_exposure)

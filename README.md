@@ -192,8 +192,7 @@ uv build
 - Backtests use generic fee/slippage assumptions but still omit latency, order-book liquidity,
   partial fills, venue rejects, and venue-specific rules.
 - A signal redelivered after a partially completed live order can still create an ambiguous or
-  duplicate execution.
-- Sell sizing currently lacks authoritative free-base-asset accounting.
+  duplicate execution; this is why live mode is disabled.
 - Portfolio cost-basis reconstruction can be wrong for long or same-timestamp trade histories.
 - The optional Bytewax path acknowledges input before checkpointed processing and does not await
   signal publication; it is experimental.

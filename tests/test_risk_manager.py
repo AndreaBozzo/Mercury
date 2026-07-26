@@ -12,11 +12,13 @@ from executor.risk_manager import (
     RiskStateUnavailable,
     check_risk,
     default_risk_limits,
+    load_available_balance,
     load_exposure,
     load_halt_flag,
     load_position_states,
     load_risk_limits,
     record_trade_execution,
+    save_available_balance,
     save_position_states,
     save_risk_limits,
 )
@@ -153,6 +155,22 @@ async def test_record_trade_execution_reduces_exposure_for_sell_orders():
 
 
 @pytest.mark.asyncio
+async def test_check_risk_applies_per_trade_cap_to_sells():
+    kv = FakeKV(
+        {
+            EXPOSURE_KEY: b"500",
+            RISK_LIMITS_KEY: (
+                b'{"max_exposure_dollars": 1000, "max_trade_notional_dollars": 200, '
+                b'"sentiment_score": 0}'
+            ),
+        }
+    )
+    sell_signal = make_signal().model_copy(update={"action": "SELL"})
+
+    assert await check_risk(sell_signal, FakeJetStream(kv)) is False
+
+
+@pytest.mark.asyncio
 async def test_load_risk_limits_defaults_when_missing():
     js = FakeJetStream(FakeKV())
 
@@ -261,4 +279,24 @@ async def test_save_and_load_position_states_round_trip():
             "cost_basis": 50.0,
             "last_trade_timestamp": 3,
         }
+    }
+
+
+@pytest.mark.asyncio
+async def test_save_and_load_available_balances_round_trip():
+    kv = FakeKV()
+    js = FakeJetStream(kv)
+    computed_at = datetime.now(UTC).isoformat()
+
+    await save_available_balance(
+        js,
+        quote_free={"EUR": 10.0},
+        asset_free={"BTC": 0.25, "EUR": 10.0},
+        computed_at_iso=computed_at,
+    )
+
+    assert await load_available_balance(js) == {
+        "quote_free": {"EUR": 10.0},
+        "asset_free": {"BTC": 0.25, "EUR": 10.0},
+        "computed_at": computed_at,
     }

@@ -7,8 +7,8 @@ from core.symbols import normalize_symbol
 
 # Placeholder quantity emitted by strategies. The executor's sizer (executor/sizing.py)
 # is the authoritative source of order size; strategies emit intent (side + confidence)
-# only. If a signal reaches the exchange with this value it will trip Binance's
-# min-notional check and fail loud — that is intentional.
+# only. If a signal reaches a sandbox exchange with this value it should trip
+# venue minimum-notional validation and fail loud — that is intentional.
 INTENT_PLACEHOLDER_QTY = 1e-8
 
 

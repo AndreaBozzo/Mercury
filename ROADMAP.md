@@ -81,7 +81,7 @@ availability.
   jurisdiction, product availability, and the operator's account eligibility.
 - [ ] Document the sandbox's actual semantics and limitations.
 - [ ] Use one long-lived, rate-limited exchange client with explicit timeouts.
-- [ ] Track authoritative free base and quote balances; size BUY and SELL independently.
+- [x] Track authoritative free base and quote balances; size BUY and SELL independently.
 - [ ] Make risk reservations and exposure updates atomic under concurrent signals.
 - [ ] Reconcile balances, open orders, and fills without truncating trade history.
 - [ ] Handle multiple fills sharing one exchange timestamp.

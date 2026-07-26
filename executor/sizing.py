@@ -5,21 +5,21 @@ Strategies emit intent (side + confidence) with a placeholder quantity
 (`INTENT_PLACEHOLDER_QTY` in core/schemas.py). This module converts that
 intent into a real order quantity using:
 
-  qty * mark_price = min(
-      balance_quote * SIZING_FIXED_FRACTION * confidence * vol_multiplier,
-      MAX_NOTIONAL_EUR (converted to quote if needed),
-  )
+  BUY: quote cash -> base quantity
+  SELL: free base inventory -> base quantity
+
+Both sides are capped by ``MAX_NOTIONAL_EUR`` and require an EUR-quoted symbol
+until Mercury has a timestamped FX conversion service.
 
 Fail-safe behaviour:
   - Vol modulator missing or stale -> skip (caller must NOT trade).
   - Balance missing or stale -> skip.
   - Computed notional below exchange min-notional -> skip.
 
-Week 1 MVP scope:
-  - Mark price via inline `fetch_ticker` (Week 3 promotes to position_state KV).
-  - Vol modulator gating is OPT-IN (SIZING_REQUIRE_VOL_MODULATOR), default off,
-    so Week 1 wiring works before the brain modulator (Week 2) is live.
-  - Min-notional limits loaded from ccxt markets, cached after first call.
+Current sandbox scope:
+  - Mark price is fetched inline.
+  - Volatility state is required by default and fails closed when missing or stale.
+  - Min-notional limits are loaded from CCXT markets and cached per process.
 """
 
 from __future__ import annotations
@@ -28,6 +28,7 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from json import loads
+from math import isfinite
 from typing import Any, Literal
 
 from nats.js import JetStreamContext
@@ -45,19 +46,19 @@ def _as_float(value: Any) -> float | None:
     try:
         if value is None:
             return None
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if isfinite(number) else None
 
 
 SIZING_FIXED_FRACTION = env_positive_float("SIZING_FIXED_FRACTION", 0.25)
 if SIZING_FIXED_FRACTION > 1:
     raise ConfigurationError("SIZING_FIXED_FRACTION must be less than or equal to 1")
-MAX_NOTIONAL_EUR = env_positive_float("MAX_NOTIONAL_EUR", 5.5)
+MAX_NOTIONAL_EUR = env_positive_float("MAX_NOTIONAL_EUR", 5.0)
 SIZING_BALANCE_MAX_AGE_SECONDS = env_positive_float("SIZING_BALANCE_MAX_AGE_SECONDS", 60)
 VOL_MODULATOR_MAX_AGE_SECONDS = env_positive_float("VOL_MODULATOR_MAX_AGE_SECONDS", 60)
 SIZING_REQUIRE_VOL_MODULATOR = env_bool("SIZING_REQUIRE_VOL_MODULATOR", True)
-RISK_EUR_PER_QUOTE = env_positive_float("RISK_EUR_PER_QUOTE", 0.92)  # 1 USDT ≈ 0.92 EUR
 
 VOL_MODULATOR_KEY = "vol_modulator"
 AVAILABLE_BALANCE_KEY = "available_balance"
@@ -126,17 +127,17 @@ async def _fetch_mark_price(symbol: str) -> float | None:
         await exchange.close()
 
 
-def _is_stale(computed_at_iso: str | None, max_age_seconds: float) -> bool:
+def _is_stale(computed_at_iso: Any, max_age_seconds: float) -> bool:
     if not computed_at_iso:
         return True
     try:
         ts = datetime.fromisoformat(computed_at_iso)
-    except ValueError:
+    except (TypeError, ValueError):
         return True
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
     age = (datetime.now(UTC) - ts).total_seconds()
-    return age > max_age_seconds
+    return age < -5 or age > max_age_seconds
 
 
 async def _read_kv_json(js: JetStreamContext, key: str) -> dict[str, Any] | None:
@@ -158,7 +159,7 @@ async def _read_vol_multiplier(js: JetStreamContext) -> tuple[float | None, Skip
     if raw is None:
         if SIZING_REQUIRE_VOL_MODULATOR:
             return None, "vol_modulator_missing"
-        return 1.0, "ok"  # MVP fallback: no modulator yet (Week 2)
+        return 1.0, "ok"
 
     computed_at = raw.get("computed_at")
     if _is_stale(computed_at, VOL_MODULATOR_MAX_AGE_SECONDS):
@@ -170,9 +171,10 @@ async def _read_vol_multiplier(js: JetStreamContext) -> tuple[float | None, Skip
     return max(0.0, min(1.0, multiplier)), "ok"
 
 
-async def _read_quote_balance(
+async def _read_free_balance(
     js: JetStreamContext,
-    quote_asset: str,
+    asset: str,
+    bucket_name: Literal["quote_free", "asset_free"],
 ) -> tuple[float | None, SkipReason]:
     raw = await _read_kv_json(js, AVAILABLE_BALANCE_KEY)
     if raw is None:
@@ -181,11 +183,11 @@ async def _read_quote_balance(
     if _is_stale(raw.get("computed_at"), SIZING_BALANCE_MAX_AGE_SECONDS):
         return None, "balance_stale"
 
-    quote_free = raw.get("quote_free")
-    if not isinstance(quote_free, dict):
+    free_by_asset = raw.get(bucket_name)
+    if not isinstance(free_by_asset, dict):
         return None, "balance_missing"
 
-    free = _as_float(quote_free.get(quote_asset))
+    free = _as_float(free_by_asset.get(asset))
     if free is None:
         return None, "balance_missing"
     if free <= 0:
@@ -202,8 +204,12 @@ async def size_signal(signal: TradeSignal, js: JetStreamContext) -> SizingDecisi
     `quantity` set to the computed amount in base asset.
     """
     symbol = normalize_symbol(signal.symbol)
-    _base, quote = split_symbol(symbol)
-    if not quote:
+    base, quote = split_symbol(symbol)
+    if not base or quote != "EUR":
+        logger.warning(
+            "Sizer: rejecting %s (only EUR-quoted sandbox symbols are supported)",
+            symbol,
+        )
         return SizingDecision(None, "invalid_quote")
 
     multiplier, vol_reason = await _read_vol_multiplier(js)
@@ -211,9 +217,22 @@ async def size_signal(signal: TradeSignal, js: JetStreamContext) -> SizingDecisi
         logger.warning("Sizer: rejecting %s (%s)", symbol, vol_reason)
         return SizingDecision(None, vol_reason)
 
-    balance, balance_reason = await _read_quote_balance(js, quote)
+    balance_asset = quote if signal.action == "BUY" else base
+    balance_bucket: Literal["quote_free", "asset_free"] = (
+        "quote_free" if signal.action == "BUY" else "asset_free"
+    )
+    balance, balance_reason = await _read_free_balance(
+        js,
+        balance_asset,
+        balance_bucket,
+    )
     if balance is None:
-        logger.warning("Sizer: rejecting %s (%s, quote=%s)", symbol, balance_reason, quote)
+        logger.warning(
+            "Sizer: rejecting %s (%s, asset=%s)",
+            symbol,
+            balance_reason,
+            balance_asset,
+        )
         return SizingDecision(None, balance_reason)
 
     mark_price = await _fetch_mark_price(symbol)
@@ -221,13 +240,12 @@ async def size_signal(signal: TradeSignal, js: JetStreamContext) -> SizingDecisi
         logger.warning("Sizer: rejecting %s (mark_price_unavailable)", symbol)
         return SizingDecision(None, "mark_price_unavailable")
 
-    target_quote = balance * SIZING_FIXED_FRACTION * signal.confidence_score * multiplier
-
-    cap_in_quote = MAX_NOTIONAL_EUR
-    if quote != "EUR":
-        # Convert EUR cap to quote asset; conservative if FX is unknown
-        cap_in_quote = MAX_NOTIONAL_EUR / RISK_EUR_PER_QUOTE
-    target_quote = min(target_quote, cap_in_quote)
+    if signal.action == "BUY":
+        target_quote = balance * SIZING_FIXED_FRACTION * signal.confidence_score * multiplier
+    else:
+        target_base = balance * SIZING_FIXED_FRACTION * signal.confidence_score * multiplier
+        target_quote = target_base * mark_price
+    target_quote = min(target_quote, MAX_NOTIONAL_EUR)
 
     if target_quote <= 0:
         return SizingDecision(None, "below_min_notional", target_quote, mark_price)
@@ -258,7 +276,7 @@ async def size_signal(signal: TradeSignal, js: JetStreamContext) -> SizingDecisi
         signal.confidence_score,
         multiplier,
         balance,
-        quote,
+        balance_asset,
         qty,
         mark_price,
         target_quote,

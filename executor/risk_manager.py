@@ -139,11 +139,13 @@ async def save_position_states(
 async def save_available_balance(
     js: JetStreamContext,
     quote_free: Mapping[str, float],
+    asset_free: Mapping[str, float],
     computed_at_iso: str,
 ) -> None:
     kv = await js.key_value(KV_BUCKET)
     payload = {
         "quote_free": {asset: float(value) for asset, value in quote_free.items()},
+        "asset_free": {asset: float(value) for asset, value in asset_free.items()},
         "computed_at": computed_at_iso,
     }
     await kv.put(AVAILABLE_BALANCE_KEY, dumps(payload, sort_keys=True).encode())
@@ -213,7 +215,7 @@ async def check_risk(signal: TradeSignal, js: JetStreamContext) -> bool:
     max_trade_notional = float(risk_limits["max_trade_notional_dollars"])
     max_exposure = float(risk_limits["max_exposure_dollars"])
 
-    if signal.action == "BUY" and estimated_cost > max_trade_notional:
+    if estimated_cost > max_trade_notional:
         logger.warning(
             "Risk check failed: Trade notional %.2f exceeds max trade notional %.2f.",
             estimated_cost,
