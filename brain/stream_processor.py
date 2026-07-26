@@ -69,13 +69,13 @@ from bytewax.inputs import DynamicSource, StatelessSourcePartition
 from bytewax.outputs import DynamicSink, StatelessSinkPartition
 from bytewax.run import cli_main
 from nats.js import JetStreamContext
-from nats.js.api import ConsumerConfig
 
 from core.nats_utils import (
     MARKET_STREAM_NAME,
     MARKET_STREAM_SUBJECT,
     NatsSession,
     ensure_stream,
+    push_consumer_config,
     validate_push_consumer,
 )
 from core.schemas import INTENT_PLACEHOLDER_QTY, TradeSignal
@@ -140,7 +140,7 @@ class _NatsBridge:
                 self._subject,
                 durable=BRIDGE_DURABLE_NAME,
                 cb=_handler,
-                config=ConsumerConfig(max_deliver=BRIDGE_CONSUMER_MAX_DELIVER),
+                config=push_consumer_config(max_deliver=BRIDGE_CONSUMER_MAX_DELIVER),
                 manual_ack=True,
             )
             while True:

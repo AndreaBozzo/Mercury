@@ -61,5 +61,7 @@ async def test_bridge_subscription_owns_ack_and_connection(monkeypatch):
 
     assert calls["subject"] == "nephtys.stream.crypto.btc"
     assert calls["subscribe"]["manual_ack"] is True
+    assert calls["subscribe"]["config"].ack_wait == 120.0
     assert calls["subscribe"]["config"].max_deliver == 10
+    assert calls["subscribe"]["config"].max_ack_pending == 1000
     assert client.drained is True

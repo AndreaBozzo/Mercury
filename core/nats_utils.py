@@ -16,7 +16,7 @@ import nats
 from dotenv import load_dotenv
 from nats.aio.client import Client as NatsClient
 from nats.js import JetStreamContext
-from nats.js.api import AckPolicy
+from nats.js.api import ConsumerConfig
 from nats.js.errors import NotFoundError
 
 load_dotenv()
@@ -24,6 +24,8 @@ load_dotenv()
 _NATS_URL = os.getenv("NATS_URL", "nats://localhost:4222")
 MARKET_STREAM_NAME = os.getenv("MERCURY_MARKET_STREAM_NAME", "NEPHTYS")
 MARKET_STREAM_SUBJECT = os.getenv("MERCURY_MARKET_STREAM_SUBJECT", "nephtys.stream.>")
+PUSH_CONSUMER_ACK_WAIT_SEC = float(os.getenv("MERCURY_PUSH_CONSUMER_ACK_WAIT_SEC", "120"))
+PUSH_CONSUMER_MAX_ACK_PENDING = int(os.getenv("MERCURY_PUSH_CONSUMER_MAX_ACK_PENDING", "1000"))
 
 
 @dataclass(slots=True)
@@ -79,6 +81,7 @@ async def validate_push_consumer(
     max_deliver: int,
 ) -> None:
     """Reject correctness-relevant drift in an existing durable push consumer."""
+    expected = push_consumer_config(max_deliver=max_deliver)
     try:
         info = await js.consumer_info(stream_name, durable_name)
     except NotFoundError:
@@ -86,14 +89,22 @@ async def validate_push_consumer(
 
     config = info.config
     drift: list[str] = []
-    if config.ack_policy != AckPolicy.EXPLICIT:
-        drift.append(f"ack_policy={config.ack_policy!r} (expected explicit)")
-    if config.max_deliver != max_deliver:
-        drift.append(f"max_deliver={config.max_deliver!r} (expected {max_deliver!r})")
-    if config.filter_subject != filter_subject:
-        drift.append(f"filter_subject={config.filter_subject!r} (expected {filter_subject!r})")
+    for field in (
+        "ack_policy",
+        "ack_wait",
+        "max_deliver",
+        "max_ack_pending",
+        "deliver_policy",
+        "filter_subject",
+    ):
+        actual_value = getattr(config, field)
+        expected_value = filter_subject if field == "filter_subject" else getattr(expected, field)
+        if actual_value != expected_value:
+            drift.append(f"{field}={actual_value!r} (expected {expected_value!r})")
     if config.filter_subjects:
         drift.append(f"filter_subjects={config.filter_subjects!r} (expected none)")
+    if config.backoff:
+        drift.append(f"backoff={config.backoff!r} (expected none)")
     if config.deliver_subject is None:
         drift.append("delivery mode is pull (expected push)")
     if config.deliver_group:
@@ -105,6 +116,21 @@ async def validate_push_consumer(
             f"incompatible persisted configuration: {details}. Migrate or recreate "
             "the durable deliberately before restarting the service."
         )
+
+
+def push_consumer_config(*, max_deliver: int) -> ConsumerConfig:
+    """Build the shared explicit-ACK configuration for Mercury push consumers."""
+    if max_deliver < 1:
+        raise ValueError("MERCURY_CONSUMER_MAX_DELIVER must be at least 1")
+    if PUSH_CONSUMER_ACK_WAIT_SEC <= 0:
+        raise ValueError("MERCURY_PUSH_CONSUMER_ACK_WAIT_SEC must be greater than zero")
+    if PUSH_CONSUMER_MAX_ACK_PENDING < 1:
+        raise ValueError("MERCURY_PUSH_CONSUMER_MAX_ACK_PENDING must be at least 1")
+    return ConsumerConfig(
+        ack_wait=PUSH_CONSUMER_ACK_WAIT_SEC,
+        max_deliver=max_deliver,
+        max_ack_pending=PUSH_CONSUMER_MAX_ACK_PENDING,
+    )
 
 
 async def publish_arrow(js: JetStreamContext, subject: str, arrow_bytes: bytes) -> None:

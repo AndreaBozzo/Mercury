@@ -5,11 +5,15 @@ import os
 from datetime import UTC, datetime
 
 from nats.aio.client import Client as NatsClient
-from nats.js.api import ConsumerConfig
 from nats.js.errors import BucketNotFoundError
 from pydantic import ValidationError
 
-from core.nats_utils import connect_jetstream, ensure_stream, validate_push_consumer
+from core.nats_utils import (
+    connect_jetstream,
+    ensure_stream,
+    push_consumer_config,
+    validate_push_consumer,
+)
 from core.schemas import TradeSignal
 from executor.exchange_client import (
     build_persisted_position_state,
@@ -349,7 +353,7 @@ async def subscribe_trade_signals(js):
         "trade.signals",
         durable=_EXECUTOR_DURABLE_NAME,
         cb=handler,
-        config=ConsumerConfig(max_deliver=_CONSUMER_MAX_DELIVER),
+        config=push_consumer_config(max_deliver=_CONSUMER_MAX_DELIVER),
         manual_ack=True,
     )
 

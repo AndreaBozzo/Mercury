@@ -274,7 +274,9 @@ async def test_trade_subscription_disables_callback_auto_ack():
 
     assert js.kwargs is not None
     assert js.kwargs["manual_ack"] is True
+    assert js.kwargs["config"].ack_wait == 120.0
     assert js.kwargs["config"].max_deliver == 10
+    assert js.kwargs["config"].max_ack_pending == 1000
 
 
 @pytest.mark.asyncio

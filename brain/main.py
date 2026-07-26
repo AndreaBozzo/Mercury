@@ -19,7 +19,6 @@ import logging
 import os
 
 from nats.aio.client import Client as NatsClient
-from nats.js.api import ConsumerConfig
 from pydantic import ValidationError
 
 from brain.adapters.binance_depth import BinanceDepthBootstrapper, parse_binance_depth
@@ -30,6 +29,7 @@ from core.nats_utils import (
     MARKET_STREAM_SUBJECT,
     connect_jetstream,
     ensure_stream,
+    push_consumer_config,
     validate_push_consumer,
 )
 from core.order_book import OrderBook
@@ -245,7 +245,7 @@ async def subscribe_market_events(js):
         _BRAIN_SUBJECT,
         durable=_BRAIN_DURABLE_NAME,
         cb=get_market_handler(js),
-        config=ConsumerConfig(max_deliver=_CONSUMER_MAX_DELIVER),
+        config=push_consumer_config(max_deliver=_CONSUMER_MAX_DELIVER),
         manual_ack=True,
     )
 

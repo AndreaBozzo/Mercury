@@ -4,7 +4,12 @@ import pytest
 from nats.js.api import AckPolicy, ConsumerConfig
 from nats.js.errors import NotFoundError
 
-from core.nats_utils import NatsSession, ensure_stream, validate_push_consumer
+from core.nats_utils import (
+    NatsSession,
+    ensure_stream,
+    push_consumer_config,
+    validate_push_consumer,
+)
 
 
 class FakeClient:
@@ -135,3 +140,11 @@ async def test_validate_push_consumer_rejects_filter_drift():
             filter_subject="market.btc",
             max_deliver=10,
         )
+
+
+def test_push_consumer_config_sets_timing_and_pending_headroom():
+    config = push_consumer_config(max_deliver=10)
+
+    assert config.ack_wait == 120.0
+    assert config.max_deliver == 10
+    assert config.max_ack_pending == 1000
