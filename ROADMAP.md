@@ -1,243 +1,123 @@
-# Mercury — Roadmap
+# Mercury roadmap
 
-This document tracks what it would take to turn Mercury from a working proof-of-concept into something worth running with real capital. It is intentionally honest about what is simulated vs. real at each stage.
+Mercury is being developed as a research and observation system first. Progress is gated by
+evidence, not by dates or by the amount of money available to trade.
 
----
+The detailed audit behind this roadmap is in [docs/ASSESSMENT.md](docs/ASSESSMENT.md).
 
-## Current state (v0.2)
+## Current stage: observation alpha
 
-| Component | Status | Gap |
-|---|---|---|
-| Nephtys L1 feed (BTC trade/ticker) | ✅ Working | Only top-of-book price, no depth |
-| NATS JetStream pub/sub | ✅ Working | — |
-| Moving average strategy | ✅ Working | Toy signal, no edge |
-| Risk manager | ✅ Working | Virtual balance only |
-| Exchange client (CCXT) | ✅ Testnet-validated | Spot testnet only; no live venue diversification |
-| L2 order book | ✅ Live on BTC/USDT with snapshot bootstrap | Snapshot refresh/recovery still needs hardening |
-| Arrow IPC internal transport | ✅ Built, tested | Binary path is ready; not yet the default live path |
-| Bytewax stream processor | ✅ Built | Not yet replacing brain/main.py in prod |
-| Backtester (Lance + Ray) | ✅ Built, tested | No historical data yet |
-| Plutarch archiver | ✅ Hardened 2026-05-19 | Compaction/retention + Telegram alert on quarantine still pending (M2) |
+The public alpha is useful when a new contributor can reproduce this path without credentials:
 
-**Honest summary:** Mercury can now receive a live Binance price feed, generate a moving average signal, bootstrap and maintain a BTC/USDT L2 book, pass signals through a circuit-breaker-aware risk check, and execute confirmed paper trades on Binance Spot Testnet with startup reconciliation and live executor metrics. The infrastructure path works end-to-end; the strategy still has no demonstrated edge.
-
----
-
-## Active plan: 2026 Q2 (May–Jul)
-
-The phases below remain the long-arc view. The next 2–3 months are scoped tightly around **getting to a small live-capital test safely**, on a ~5 hrs/week budget. Single theme per month, no parallel tracks, live flip is gated on a checklist (not a date).
-
-| Month | Theme | Headline deliverables |
-|---|---|---|
-| **M1 — Risk & Sizing Hardening** | Replace dead code, make sizing capital-aware | Delete `executor/news_risk_agent.py`. Add `brain/risk/volatility_modulator.py` (rolling stdev → multiplier in `[0,1]`, stale → trip HALT). Add `executor/sizing.py` (fixed-fractional, balance-aware, `MAX_NOTIONAL_EUR` cap, modulator-stale → qty=0 — never last-known-value). Strategies emit *intent* (side+confidence); executor sizes. |
-| **M2 — Durability & Observability** | Survive crashes, make humans hear breakage | `executor/state_store.py` (SQLite mirror of NATS KV exposure, exchange truth wins on disagreement). `core/alerts.py` (Telegram, 1 msg/min/category). Tests for `plutarch/archiver.py` and `brain/stream_processor.py` (currently 0% coverage). GitHub Actions CI (uv + ruff + pytest). |
-| **M3 — Drill, Cushion, Live Flip** | Prove safety net under stress, then flip the smallest possible amount | `scripts/drill_halt.py` (synthetic vol spike + broken depth + rejected order → HALT must trip, alerts must fire, sizer must go to 0). `scripts/halt.py` (first-class kill switch). 14-day testnet soak. Mainnet via env flag, `MAX_NOTIONAL_EUR=2`, single strategy = moving_average. Compare first 10 live fills to backtester predictions. |
-
-### M1 progress (as of 2026-05-19)
-
-Live deposit confirmed at 9 EUR; `MAX_NOTIONAL_EUR` default raised from 2.0 to 5.5 to sit above Binance min-notional (~4.6 EUR). News risk agent kept (not deleted) and runs in parallel — writes to `risk_limits` KV; the vol modulator (Week 2) will write to a separate `vol_modulator` KV key so the two staleness budgets do not collide.
-
-**Week 1 — done**
-- `INTENT_PLACEHOLDER_QTY = 1e-8` in `core/schemas.py`; the three strategies (`brain/strategies/moving_average.py`, `brain/strategies/order_book_vwap_imbalance.py`, `brain/stream_processor.py`) emit the placeholder instead of `quantity=0.01`.
-- `_refresh_runtime_state` now writes `available_balance` to the `mercury_wallet_state` KV bucket every 15 s (free balance per quote asset + ISO timestamp).
-- `executor/sizing.py` MVP: reads `available_balance` + `vol_modulator` + inline `fetch_ticker`, caches Binance min-notional, returns a typed `SizingDecision` with explicit skip reasons.
-- Sizer wired into `executor/main.py` between `check_risk` and `execute_trade`. `DRY_RUN` bypasses it; live mode acks and records `skipped_<reason>` on rejection.
-
-**Plutarch hardening (M2 work pulled forward, 2026-05-19)** — review surfaced three critical bugs that would make live-incident post-mortems impossible:
-- Ack-before-write replaced with ack-after-flush. SIGKILL between ack and Lance commit no longer creates silent data gaps.
-- Periodic flush every `PLUTARCH_FLUSH_INTERVAL_SEC` (default 30s) in addition to batch-size (default 500). Quarantine-NDJSON fallback when Lance writes fail — consumer never wedges on a poison batch.
-- Fixed Arrow schema (`source, type, timestamp, seq, payload_json, _subject, _archived_at_ns`). The inner payload is JSON-encoded so mixed event types (trade + l2_snapshot) no longer drift the schema. Backtester (`backtesting/engine.py:_payload_from_row`) decodes both new and legacy rows.
-- Pull-consumer for natural backpressure. `/healthz` + `/metrics` on port 9110. Dockerfile + docker-compose entry with `plutarch-data` and `nats-data` volumes (NATS JetStream now persists to disk too — previously in-memory only).
-- 5 regression tests in [tests/test_plutarch.py](tests/test_plutarch.py) covering ack ordering, quarantine path, schema drift, payload round-trip, and envelope-missing-fields.
-
-**Week 2 — next**
-- `brain/risk/volatility_modulator.py` as a coroutine task spawned by `brain/main.py`. Rolling stdev → multiplier ∈ [0, 1] published to `vol_modulator` KV.
-- Flip `SIZING_REQUIRE_VOL_MODULATOR=true` once the modulator is running.
-
-### Open findings (from 2026-05-19 code reviews)
-
-Two code reviews on 2026-05-19 surfaced findings. The critical and bug-correlated items were fixed inline (see Week 1 + Plutarch hardening sections above). The items below are **deferred deliberately** and must be cleared before the M3 live flip — most of them slot naturally into M2 (Durability & Observability) or M3 (Drill & Cushion).
-
-#### Executor / sizer — review of 2026-05-19
-
-| # | Finding | Location | Severity | Target |
-|---|---|---|---|---|
-| E5 | `_market_min_cost` cache has no TTL or negative caching; `load_markets()` re-downloads ~1.5 MB per cache miss. Stale min-notional unnoticed until process restart. | `executor/sizing.py:90-109` | high | M2 |
-| E6 | Every `size_signal()` opens 2 fresh ccxt exchanges (`_fetch_mark_price` + `_load_min_cost`); same pattern in `fetch_portfolio_snapshot` and `fetch_open_orders`. Rate-limit risk in live. | `executor/sizing.py:113`, `executor/exchange_client.py:91,130,216` | high | M2 (move to singleton ccxt client with shared session) |
-| E9 | KV reads swallow all exceptions; `load_halt_flag` returns `False` on NATS transport errors (HALT fails OPEN). | `executor/risk_manager.py:24-32,50-62,124-137,140-148` | medium | M2 — differentiate `nats.js.errors.KeyNotFoundError` from transport errors; HALT must fail-safe to `True` on transport failure |
-| E10 | `_is_stale` catches only `ValueError`; a non-string timestamp raises `TypeError` and crashes the sizer (theoretical today; cheap fix). | `executor/sizing.py:129-139` | low | M2 |
-| E11 | `RISK_EUR_PER_QUOTE` is a single scalar hardcoded for USDT. Adding any third quote asset (BUSD, FDUSD, EUR via other pairs) yields wrong conversion. | `executor/sizing.py:61,226-229` | medium | M3 (only when multi-symbol lands; today BTC/USDT only) |
-| E13 | `_balance_free` (line 110) and `_balance_total` (line 285) handle the same ccxt balance shapes — comment-only fix to explain the intentional split (`free` excludes locked orders, `total` includes them). | `executor/exchange_client.py:110-123,285-300` | low | M2 |
-
-`MAX_NOTIONAL_EUR=5.5` default (above Binance min-notional) is the active value. On a 9 EUR deposit this gates to ~1 trade in flight at a time — pre-flight constraint to remember on first live run, not a finding.
-
-#### Plutarch — review of 2026-05-19
-
-| # | Finding | Location | Severity | Target |
-|---|---|---|---|---|
-| P5 | Pull-consumer is implemented but inflight/ack-pending limits are still implicit. No metric for `max_ack_pending` headroom. Will only bite once L2 deltas (~100 evt/s) ship. | `plutarch/archiver.py:199-210` | medium | M2 (add `ack_pending` gauge + explicit consumer config) |
-| P6 | No compaction / `cleanup_old_versions` cron. Lance fragment count grows linearly with batches; manifest scans get slow after months. At ~15 evt/s estimated ~45 GB raw / 6 months. | `plutarch/archiver.py` (no cron task) | medium | M2 (weekly `lance.dataset(p).optimize.compact_files()` + `.cleanup_old_versions(older_than=7d)` in-process scheduler) |
-| P11 | Quarantine write triggers `_state["quarantine_writes"] += 1` and an ERROR log, but no Telegram alert / external surfacing. A flood of poison batches would be silent. | `plutarch/archiver.py:103-121` | high | M2 — wire `core/alerts.py` to push when `quarantine_writes > 0` |
-
-#### Cross-cutting: mypy strictness
-
-| # | Finding | Severity | Target |
-|---|---|---|---|
-| X1 | Mypy baseline is intentionally permissive (`check_untyped_defs = false`, no `--strict`). New code added in M1 is `--strict`-clean opportunistically, but legacy modules (`brain/main.py`, `brain/stream_processor.py`) still rely on the permissive baseline. | medium | End of Week 2 / start of M2 — single project-wide tightening pass (per user, 2026-05-19) |
-
-### Live Capital Flip Gate (must all be true before flipping)
-
-- 14 consecutive days of testnet uptime, no manual interventions
-- Telegram alerts verified for HALT, drift, depth desync, vol stall, order reject (5/5)
-- SQLite reconciliation tested via `kill -9` drill, 3/3 passes
-- Position sizer: unit tests + testnet integration test (cap, floor, modulator, balance)
-- `scripts/drill_halt.py` executed within last 7 days, HALT tripped as expected
-- CI green on `main`
-- Binance API key: spot-trade only, withdraw disabled, IP allowlisted
-- `MAX_NOTIONAL_EUR ≤ 2` for first 3 sessions
-- Manual kill-switch (`scripts/halt.py`) tested end-to-end
-- Wall-clock session cap enforced (auto-exit after N minutes regardless of P&L)
-- NTP time-sync verified on host
-- Runbook exists in `docs/runbook.md`
-- **E9 closed**: `load_halt_flag` fails SAFE (returns `True`) on NATS transport errors — verified with a NATS-down drill
-- **P11 closed**: Telegram alert fires within 60 s of `plutarch_quarantine_writes_total` incrementing — verified with a forced poison batch
-- **E5/E6 closed**: ccxt exchange instance is reused (singleton) and `_market_min_cost` has TTL — no per-signal `load_markets()` re-download under live load
-
-### Nephtys-side work (must stay generic)
-
-Mercury depends on Nephtys but Nephtys serves more than one consumer profile, so any change must still make sense for non-crypto streams.
-
-**Committed this window:**
-- Optional WebSocket post-connect subscribe-message hook (`internal/connector/websocket.go`) — generic `on_connect_send` config field. Mercury uses it for combined Binance subscriptions; any future venue requiring auth/subscribe frames benefits.
-- `UpdatePipeline` persists to KV (`internal/server/manager.go` ~L151–184) — currently transient, lost on restart. Trivial fix, high value.
-
-**Deferred (rationale = stay generic):**
-- Backpressure / slow-consumer policy — needs a 2nd consumer profile to design without coupling.
-- Schema/version metadata in envelope — wait until at least one non-crypto stream lands so the envelope isn't crypto-shaped.
-- End-to-end latency histograms + tracing hooks — would impose OTel unilaterally; Mercury can measure ingress→signal in `brain/observability.py` for now.
-
-### Explicitly out of scope this window
-
-Arrow-as-default live path, Bytewax replacing `brain/main.py` in prod, multi-symbol, multi-venue arbitrage, ML signal generation, distributed brain. These remain in Phase 4 below.
-
----
-
-## Phase 1 — Make it real (4–6 weeks)
-
-Goal: first live paper trade executed end-to-end with no human intervention.
-
-### 1.1 Uncomment and validate exchange execution
-- ✅ `create_market_buy_order` / `create_market_sell_order` are enabled behind a `DRY_RUN` flag
-- ✅ Testnet round-trips verified: order placed → fill confirmed → exposure updated in NATS KV
-- ✅ Startup reconciliation checks configured symbols for open exchange orders before the executor begins consuming signals
-
-### 1.2 Add L2 market-data support
-The order book module now applies raw Binance depth batches atomically:
+```text
+public market feed -> Nephtys -> NATS -> Brain -> TradeSignal
+                                      \-> Plutarch archive
+TradeSignal -> Executor observe mode -> recorded decision, no exchange client or order
 ```
-wss://stream.binance.com:9443/ws/btcusdt@depth@100ms
-```
-Nephtys should stay generic: classify the event as `depthUpdate`, preserve the exchange timestamp and sequence, and publish the raw payload. Mercury owns the Binance-specific adapter and applies each `[U, u]` update range as one atomic order-book mutation. Bootstrap now follows Binance's local-book procedure: buffer stream updates, fetch the REST depth snapshot, discard stale buffered updates, then apply the first buffered event where `U <= lastUpdateId + 1 <= u`.
 
-### 1.3 Prometheus metrics
-The Brain and Executor now expose lightweight `/health` and `/metrics` HTTP surfaces.
-- ✅ `mercury_signals_emitted_total{action, symbol}`
-- ✅ `mercury_trades_executed_total{action, outcome}`
-- ✅ `mercury_book_gap_total{symbol}` — tracks sequence gap events
-- ✅ `mercury_position_pnl_dollars` — derived from exchange balances, fills, and mark prices
-- ✅ `mercury_executor_current_exposure_dollars`
-- ✅ Symbol labels are normalized to one internal form (`BTC/USDT`) across live trade, L2, and execution paths
+### Alpha acceptance gate
 
-### 1.4 Circuit breaker
-✅ A `HALT` flag now lives in NATS KV. Any service can set it (e.g. on unexpected execution error or drawdown limit breach). The executor checks it before every trade. Reset still requires a manual key deletion.
+- [x] Observation is the default and cannot construct an exchange client.
+- [x] Public BTC/EUR market data is the default profile.
+- [x] Binance-specific ingestion is optional legacy research code.
+- [x] Executor configuration distinguishes observation, sandbox, and live modes.
+- [x] HALT and unavailable/corrupt risk state fail closed.
+- [x] The locked runtime dependency set has no known advisories in `pip-audit`.
+- [x] Lint, format, tests, type checks, build, and dependency audit run in CI.
+- [x] Project status and known limitations are stated without performance claims.
+- [ ] Add a licence chosen by the owner.
+- [ ] Add contribution, security, conduct, and support policies.
+- [ ] Pin container images, run services as non-root, and add health checks.
+- [ ] Exercise the documented quickstart against a clean environment.
+- [ ] Add a small deterministic end-to-end observation smoke test.
+- [ ] Define a stable event-envelope compatibility/version policy with Nephtys.
+- [ ] Quarantine malformed-but-valid JSON in Plutarch without crashing the consumer.
 
----
+No alpha acceptance item requires sandbox or live trading.
 
-## Phase 2 — Build an edge (6–12 weeks after Phase 1)
+## Next stage: research beta
 
-Goal: a strategy with a positive Sharpe ratio validated on at least 30 days of Plutarch data.
+The beta should support repeatable data research. It is not a live-trading milestone.
 
-### 2.1 Accumulate data first
-Let Plutarch archive for 2–4 weeks before doing any real backtesting. The current Lance schema captures raw L1 ticks. Once Nephtys L2 is live, add a separate Plutarch consumer that archives order book snapshots at 1-second intervals (much smaller than tick-by-tick L2 deltas).
+### Data integrity
 
-### 2.2 Order book imbalance signal
-This is the first genuinely microstructure-based signal:
-- Compute rolling OBI from `OrderBook.imbalance(depth=5)`
-- Features: OBI, OBI slope (momentum), spread normalised by mid-price
-- Signal: OBI > 0.4 AND spread < 1 bps → short-term bullish; fade on reversal
-- Backtest with `backtesting.ray_runner.parameter_sweep` across depth and threshold params
+- Detect and surface feed stalls, sequence gaps, reconnects, stale observations, and archive lag.
+- Give Plutarch an explicit poison-message policy, bounded redelivery, quarantine alerts, and
+  retention/compaction operations.
+- Verify that archived data can be replayed deterministically into strategy state.
+- Record provenance: venue, product, feed/channel, receive time, source time, sequence semantics,
+  schema version, and software version.
+- Measure completeness over a fixed observation window and publish the report.
 
-### 2.3 VWAP reversion
-The Bytewax stream processor already has a VWAP operator. Formalise it:
-- Anchor VWAP to session open (00:00 UTC for crypto)
-- Signal: price > 2σ from VWAP AND volume declining → mean reversion SELL
-- Exit: price returns to within 0.5σ of VWAP
-- This class of signal has published evidence of edge on liquid pairs
+### Strategy isolation and evaluation
 
-### 2.4 Strategy ensemble
-Run OBI + VWAP signals as independent voters. Only execute when both agree. This cuts trade frequency but raises precision — important while position sizing is still small.
+- Keep strategy state per symbol and per venue; never share a rolling window across instruments.
+- Replace placeholder quantities in backtests with a capital-aware fill model.
+- Model fees, spread, slippage, latency, rejected fills, and base/quote balances.
+- Reset engine state between runs and make repeated runs deterministic.
+- Use train/validation/test time splits and walk-forward evaluation.
+- Report drawdown, turnover, exposure, trade count, fee sensitivity, and data coverage alongside
+  Sharpe-like metrics.
+- Treat the current moving-average and order-book strategies as examples until out-of-sample
+  evidence says otherwise.
 
-### 2.5 Ray parameter sweep
-Once 30 days of Lance data is available:
-```python
-from backtesting.ray_runner import parameter_sweep, grid_from_ranges
-from brain.strategies.moving_average import MovingAverageStrategy
+### Operations and public collaboration
 
-results = parameter_sweep(
-    MovingAverageStrategy,
-    grid_from_ranges(window=(5, 60, 5)),
-    "data/history/market_history.lance",
-)
-# results[0] is the best-performing param set
-```
-Run this weekly as Plutarch accumulates more data.
+- Publish an architecture decision record for the direct Brain path versus experimental Bytewax.
+- Add runbooks for NATS loss, feed loss, archive failure, HALT, recovery, and credential rotation.
+- Expose and document health/metrics for every service in the supported deployment path.
+- Add integration tests for NATS redelivery, restart recovery, and archive replay.
+- Publish release notes and compatibility requirements for Mercury and Nephtys.
 
----
+## Future stage: execution research
 
-## Phase 3 — Production hardening (3–6 months)
+Execution research starts only after the beta data path is trustworthy. A CCXT sandbox is useful
+for request-shape testing, but it is not evidence of realistic matching, liquidity, or legal
+availability.
 
-Goal: comfortable running Mercury unattended overnight with real (small) capital.
+### Sandbox gate
 
-### 3.1 Multi-symbol
-Extend Nephtys provisioning to `eth`, `sol`, `bnb`. The order book and strategy layer already key by symbol. The executor needs per-symbol position tracking and a portfolio-level exposure cap.
+- [ ] Select a venue only after checking the current ESMA register, permitted services, target
+  jurisdiction, product availability, and the operator's account eligibility.
+- [ ] Document the sandbox's actual semantics and limitations.
+- [ ] Use one long-lived, rate-limited exchange client with explicit timeouts.
+- [ ] Track authoritative free base and quote balances; size BUY and SELL independently.
+- [ ] Make risk reservations and exposure updates atomic under concurrent signals.
+- [ ] Reconcile balances, open orders, and fills without truncating trade history.
+- [ ] Handle multiple fills sharing one exchange timestamp.
+- [ ] Reject stale market price, balance, volatility, risk-limit, and exchange metadata inputs.
+- [ ] Run failure drills for rejected orders, timeouts, partial fills, NATS loss, and restarts.
 
-### 3.2 Position sizing
-Replace the hardcoded `quantity=0.01` with Kelly criterion or fixed-fractional sizing based on `confidence_score`, available balance, and recent volatility.
+## Live execution: out of release scope
 
-### 3.3 Execution quality
-- Track slippage: expected fill price (signal price) vs. actual fill
-- Add limit order support: use LIMIT when spread > threshold, MARKET otherwise
-- TWAP execution for larger orders: split into N child orders over T seconds
+The repository contains a doubly gated `live` mode so that the boundary is visible and testable.
+That mode is not release-ready and must remain disabled in supported deployments.
 
-### 3.4 State persistence across restarts
-Current NATS KV exposure tracking is volatile — a NATS restart wipes it. Back it up to a local SQLite file on every write. On startup, reconcile KV vs. SQLite vs. open exchange positions.
+At minimum, all of the following are required before a separate live-readiness review:
 
-### 3.5 Alerting
-- Telegram or email alert on: circuit breaker trigger, drawdown > 5%, any unhandled exception in executor
-- Daily P&L digest
+- A durable execution journal keyed by a stable signal ID and exchange client-order ID.
+- Exactly-once *decision semantics*: redelivery must never blindly submit a second order.
+- An explicit ambiguous-order state that trips HALT and requires reconciliation.
+- Durable, atomic risk reservations before submission and settlement after fills.
+- Correct partial-fill, cancel, reject, fee, and precision handling.
+- Exchange-truth reconciliation tested across process death at every order lifecycle boundary.
+- A manual kill switch that has been drilled, plus tested automatic session and loss limits.
+- Least-privilege keys, withdrawal disabled, IP restrictions where supported, secret rotation, and
+  incident response procedures.
+- Independent legal/compliance and operational review for the operator and chosen venue.
+- A new threat model and code review dedicated to the live path.
 
----
+Passing these engineering checks would make the software less unsafe; it would not demonstrate a
+profitable strategy or make trading appropriate.
 
-## Phase 4 — Scale (6+ months, if Phase 3 works)
+## Deferred until evidence justifies complexity
 
-These only make sense if Phase 2 delivered demonstrable edge.
+- Multi-symbol and multi-venue execution
+- Arbitrage
+- Machine-learned signals
+- Distributed Bytewax deployment
+- Direct venue/FIX execution
+- Automated capital increases
 
-### 4.1 Multi-venue arbitrage
-Nephtys can ingest from multiple exchanges simultaneously. If OKX and Binance price the same pair differently by > fee threshold, execute a cross-venue arb. Requires CCXT multi-exchange support (already available) and a venue-aware risk manager.
-
-### 4.2 ML signal generation
-The Plutarch Lance archive is Arrow-native, which means it loads directly into PyTorch / XGBoost without conversion. Candidate model: gradient boosted tree trained on OBI, VWAP deviation, spread, tick imbalance → next-5-minute direction. Use the Ray backtester to run walk-forward validation.
-
-### 4.3 Distributed Bytewax
-When processing more symbols or adding order flow analysis, the single-process Bytewax setup becomes a bottleneck. The NATS bridge + `NatsSource` design already supports one bridge per process — add a Kubernetes Deployment with `replicas: N` and set `BRAIN_SUBJECT` per pod.
-
-### 4.4 Direct market access
-Replace CCXT with a direct FIX or native WebSocket connection to reduce execution latency from ~100ms to ~5ms. Worth doing only if the strategy's edge is sensitive to latency (most mean-reversion signals at 1-5 second horizon are not).
-
----
-
-## What to never do
-
-- **Don't automate sizing increases.** Keep position size increases manual and deliberate. Compound losses happen fast.
-- **Don't skip Plutarch data collection to get to Phase 2 faster.** The edge must be validated on real data, not a toy dataset.
-- **Don't add more strategies before the first one is profitable.** Two unprofitable strategies just lose money faster.
-- **Don't deploy without the circuit breaker.** The overnight crash scenario is real.
+Each adds failure modes and should be proposed with a measured need, an owner, tests, and rollback
+criteria.
