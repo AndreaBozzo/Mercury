@@ -151,9 +151,17 @@ class FakeMessage:
     def __init__(self, payload: bytes):
         self.data = payload
         self.ack_count = 0
+        self.nak_delays: list[float] = []
+        self.term_count = 0
 
     async def ack(self):
         self.ack_count += 1
+
+    async def nak(self, delay: float):
+        self.nak_delays.append(delay)
+
+    async def term(self):
+        self.term_count += 1
 
 
 @pytest.mark.asyncio
@@ -232,6 +240,19 @@ async def test_message_handler_does_not_ack_when_execution_raises(monkeypatch):
     await handler(message)
 
     assert message.ack_count == 0
+    assert message.nak_delays == [5.0]
+
+
+@pytest.mark.asyncio
+async def test_message_handler_terminates_malformed_signal():
+    message = FakeMessage(b'{"symbol":')
+
+    handler = await get_message_handler(js=object())
+    await handler(message)
+
+    assert message.ack_count == 0
+    assert message.nak_delays == []
+    assert message.term_count == 1
 
 
 @pytest.mark.asyncio

@@ -240,7 +240,8 @@ class SellRebuyHistoryExchange(FakeExchange):
                 },
             ],
         }
-        return list(pages.get(since, []))
+        page_key = 0 if since is None else since
+        return list(pages.get(page_key, []))
 
 
 @pytest.mark.asyncio

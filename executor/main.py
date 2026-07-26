@@ -1,11 +1,14 @@
 import asyncio
 import contextlib
-import json
 import logging
 import os
 from datetime import UTC, datetime
 
-from core.nats_utils import get_jetstream
+from nats.js.api import ConsumerConfig
+from nats.js.errors import BucketNotFoundError
+from pydantic import ValidationError
+
+from core.nats_utils import connect_jetstream, ensure_stream
 from core.schemas import TradeSignal
 from executor.exchange_client import (
     build_persisted_position_state,
@@ -37,6 +40,8 @@ _position_pnl = 0.0
 _EXECUTOR_HTTP_HOST = os.getenv("EXECUTOR_HTTP_HOST", "127.0.0.1")
 _EXECUTOR_HTTP_PORT = int(os.getenv("EXECUTOR_HTTP_PORT", "9109"))
 _EXECUTOR_ACCOUNT_REFRESH_SECONDS = float(os.getenv("EXECUTOR_ACCOUNT_REFRESH_SECONDS", "15"))
+_CONSUMER_MAX_DELIVER = int(os.getenv("MERCURY_CONSUMER_MAX_DELIVER", "10"))
+_RETRY_DELAY_SECONDS = float(os.getenv("MERCURY_CONSUMER_RETRY_DELAY_SECONDS", "5"))
 
 
 def _record_trade_outcome(action: str, outcome: str) -> None:
@@ -162,7 +167,7 @@ async def _write_response(
 async def ensure_wallet_bucket(js):
     try:
         await js.key_value("mercury_wallet_state")
-    except Exception:
+    except BucketNotFoundError:
         await js.create_key_value(bucket="mercury_wallet_state")
 
 
@@ -198,8 +203,7 @@ async def get_message_handler(js):
     async def message_handler(msg):
         signal = None
         try:
-            data = json.loads(msg.data.decode())
-            signal = TradeSignal(**data)
+            signal = TradeSignal.model_validate_json(msg.data)
             logger.info(
                 "Received trade signal (Confidence: %.2f): %s %s",
                 signal.confidence_score,
@@ -252,51 +256,63 @@ async def get_message_handler(js):
             # Acknowledge only after successful execution + NATS KV update
             await msg.ack()
 
+        except ValidationError as exc:
+            logger.error("Terminating malformed trade signal: %s", exc)
+            await msg.term()
         except Exception as e:
             if signal is not None:
                 _record_trade_outcome(signal.action, "error")
-            logger.error("Error processing message: %s", e)
-            # Non-risk execution failures: let the message time out / NAK externally
+            logger.error("Transient trade-signal failure: %s", e, exc_info=True)
+            await msg.nak(delay=_RETRY_DELAY_SECONDS)
 
     return message_handler
 
 
 async def main():
     execution_mode = ensure_execution_mode_supported()
-    js = await get_jetstream()
+    session = await connect_jetstream()
+    js = session.js
     logger.info(
         "Executor service started in %s mode. Listening for trade signals...",
         execution_mode,
     )
 
-    await ensure_wallet_bucket(js)
-    await reconcile_startup_state(js)
-    await _refresh_runtime_state_safe(js)
-
     try:
-        await js.add_stream(name="trade_signals", subjects=["trade.*"])
-    except Exception:
-        pass
+        await ensure_wallet_bucket(js)
+        await reconcile_startup_state(js)
+        await _refresh_runtime_state_safe(js)
+        await ensure_stream(js, name="trade_signals", subjects=["trade.*"])
 
-    http_server = await asyncio.start_server(_serve_http, _EXECUTOR_HTTP_HOST, _EXECUTOR_HTTP_PORT)
-    logger.info(
-        "Executor observability listening on http://%s:%d",
-        _EXECUTOR_HTTP_HOST,
-        _EXECUTOR_HTTP_PORT,
-    )
+        http_server = await asyncio.start_server(
+            _serve_http,
+            _EXECUTOR_HTTP_HOST,
+            _EXECUTOR_HTTP_PORT,
+        )
+        logger.info(
+            "Executor observability listening on http://%s:%d",
+            _EXECUTOR_HTTP_HOST,
+            _EXECUTOR_HTTP_PORT,
+        )
 
-    handler = await get_message_handler(js)
-    await js.subscribe("trade.signals", durable="executor_service", cb=handler)
+        handler = await get_message_handler(js)
+        await js.subscribe(
+            "trade.signals",
+            durable="executor_service",
+            cb=handler,
+            config=ConsumerConfig(max_deliver=_CONSUMER_MAX_DELIVER),
+        )
 
-    refresh_task = asyncio.create_task(_portfolio_refresh_loop(js))
+        refresh_task = asyncio.create_task(_portfolio_refresh_loop(js))
 
-    try:
-        async with http_server:
-            await http_server.serve_forever()
+        try:
+            async with http_server:
+                await http_server.serve_forever()
+        finally:
+            refresh_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await refresh_task
     finally:
-        refresh_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await refresh_task
+        await session.close()
 
 
 if __name__ == "__main__":

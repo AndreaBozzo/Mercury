@@ -93,7 +93,7 @@ async def test_ack_happens_after_successful_lance_write(monkeypatch):
             call_order.append("ack")
             await _orig()
 
-        m.ack = ack_recorded  # type: ignore[method-assign]
+        m.ack = ack_recorded
 
     await archiver._flush_with_quarantine_and_ack(rows, msgs)
 
@@ -196,7 +196,7 @@ def test_roundtrip_through_payload_decoder():
 
     # Simulate the .iterrows() shape — dict-like row with .get()
     class FakeRow(dict):
-        def get(self, k, default=None):  # type: ignore[override]
+        def get(self, k, default=None):
             return super().get(k, default)
 
     decoded = _payload_from_row(FakeRow(row))

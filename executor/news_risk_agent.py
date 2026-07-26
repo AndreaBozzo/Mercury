@@ -10,8 +10,9 @@ import time
 from collections.abc import Iterable
 
 import requests
+from nats.js.errors import BucketNotFoundError
 
-from core.nats_utils import get_jetstream
+from core.nats_utils import connect_jetstream
 from executor.risk_manager import KV_BUCKET, default_risk_limits, save_risk_limits
 
 logger = logging.getLogger("news_risk_agent")
@@ -61,30 +62,36 @@ _POSITIVE_KEYWORDS = {
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    js = await get_jetstream()
-    await _ensure_wallet_bucket(js)
-    logger.info("News risk agent started.")
+    session = await connect_jetstream()
+    try:
+        await _ensure_wallet_bucket(session.js)
+        logger.info("News risk agent started.")
 
-    while True:
-        try:
-            texts = await asyncio.to_thread(query_bridge_texts)
-            if not texts:
-                logger.info("No bridge results available; keeping existing/default risk limits.")
-            else:
-                analysis = await asyncio.to_thread(analyze_news_sentiment, texts)
-                limits = limits_for_sentiment(analysis, default_risk_limits())
-                await save_risk_limits(js, limits)
-                logger.info(
-                    "Updated risk limits from %s sentiment score %.2f: exposure=%.2f trade=%.2f",
-                    limits["source"],
-                    float(limits["sentiment_score"]),
-                    float(limits["max_exposure_dollars"]),
-                    float(limits["max_trade_notional_dollars"]),
-                )
-        except Exception:
-            logger.exception("News risk agent iteration failed")
+        while True:
+            try:
+                texts = await asyncio.to_thread(query_bridge_texts)
+                if not texts:
+                    logger.info(
+                        "No bridge results available; keeping existing/default risk limits."
+                    )
+                else:
+                    analysis = await asyncio.to_thread(analyze_news_sentiment, texts)
+                    limits = limits_for_sentiment(analysis, default_risk_limits())
+                    await save_risk_limits(session.js, limits)
+                    logger.info(
+                        "Updated risk limits from %s sentiment score %.2f: "
+                        "exposure=%.2f trade=%.2f",
+                        limits["source"],
+                        float(limits["sentiment_score"]),
+                        float(limits["max_exposure_dollars"]),
+                        float(limits["max_trade_notional_dollars"]),
+                    )
+            except Exception:
+                logger.exception("News risk agent iteration failed")
 
-        await asyncio.sleep(NEWS_RISK_AGENT_INTERVAL_SECONDS)
+            await asyncio.sleep(NEWS_RISK_AGENT_INTERVAL_SECONDS)
+    finally:
+        await session.close()
 
 
 def query_bridge_texts() -> list[str]:
@@ -321,7 +328,7 @@ def limits_for_sentiment(
 async def _ensure_wallet_bucket(js) -> None:
     try:
         await js.key_value(KV_BUCKET)
-    except Exception:
+    except BucketNotFoundError:
         await js.create_key_value(bucket=KV_BUCKET)
 
 

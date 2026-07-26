@@ -15,14 +15,16 @@ per-symbol exchange sequence. See core/schemas.py for the Mercury-side contract.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
+
+from nats.js.api import ConsumerConfig
+from pydantic import ValidationError
 
 from brain.adapters.binance_depth import BinanceDepthBootstrapper, parse_binance_depth
 from brain.observability import health_payload, json_response, metrics_payload
 from brain.strategies import build_strategy_from_env
-from core.nats_utils import get_jetstream
+from core.nats_utils import connect_jetstream, ensure_stream
 from core.order_book import OrderBook
 from core.schemas import MarketEvent, OrderBookDelta, OrderBookSnapshot
 from core.symbols import normalize_symbol
@@ -38,6 +40,8 @@ _strategy = build_strategy_from_env()
 _BRAIN_HTTP_HOST = os.getenv("BRAIN_HTTP_HOST", "127.0.0.1")
 _BRAIN_HTTP_PORT = int(os.getenv("BRAIN_HTTP_PORT", "9108"))
 _BRAIN_SUBJECT = os.getenv("BRAIN_SUBJECT", "nephtys.stream.crypto.btc")
+_CONSUMER_MAX_DELIVER = int(os.getenv("MERCURY_CONSUMER_MAX_DELIVER", "10"))
+_RETRY_DELAY_SECONDS = float(os.getenv("MERCURY_CONSUMER_RETRY_DELAY_SECONDS", "5"))
 
 
 def _book(symbol: str) -> OrderBook:
@@ -162,37 +166,51 @@ async def _write_response(
 
 
 async def main() -> None:
-    js = await get_jetstream()
+    session = await connect_jetstream()
+    js = session.js
     logger.info("Brain service started.")
 
     try:
-        await js.add_stream(name="nephtys_crypto", subjects=["nephtys.stream.crypto.*"])
-    except Exception:
-        pass
+        await ensure_stream(
+            js,
+            name="nephtys_crypto",
+            subjects=["nephtys.stream.crypto.*"],
+        )
 
-    http_server = await asyncio.start_server(_serve_http, _BRAIN_HTTP_HOST, _BRAIN_HTTP_PORT)
-    logger.info("Brain observability listening on http://%s:%d", _BRAIN_HTTP_HOST, _BRAIN_HTTP_PORT)
+        http_server = await asyncio.start_server(_serve_http, _BRAIN_HTTP_HOST, _BRAIN_HTTP_PORT)
+        logger.info(
+            "Brain observability listening on http://%s:%d",
+            _BRAIN_HTTP_HOST,
+            _BRAIN_HTTP_PORT,
+        )
 
+        await js.subscribe(
+            _BRAIN_SUBJECT,
+            durable="brain_service",
+            cb=get_market_handler(js),
+            config=ConsumerConfig(max_deliver=_CONSUMER_MAX_DELIVER),
+        )
+
+        async with http_server:
+            await http_server.serve_forever()
+    finally:
+        await session.close()
+
+
+def get_market_handler(js):
     async def market_handler(msg) -> None:
         try:
-            data = json.loads(msg.data.decode())
-            event = MarketEvent(**data)
-
+            event = MarketEvent.model_validate_json(msg.data)
             await handle_market_event(event, js, _broker_stream_sequence(msg))
-
             await msg.ack()
-
+        except ValidationError as exc:
+            logger.error("Terminating malformed market event: %s", exc)
+            await msg.term()
         except Exception as exc:
-            logger.error("Error in market_handler: %s", exc, exc_info=True)
+            logger.error("Transient market-event failure: %s", exc, exc_info=True)
+            await msg.nak(delay=_RETRY_DELAY_SECONDS)
 
-    await js.subscribe(
-        _BRAIN_SUBJECT,
-        durable="brain_service",
-        cb=market_handler,
-    )
-
-    async with http_server:
-        await http_server.serve_forever()
+    return market_handler
 
 
 async def handle_market_event(event: MarketEvent, js, broker_sequence: int | None = None) -> None:

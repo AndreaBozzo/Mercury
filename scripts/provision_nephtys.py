@@ -74,7 +74,12 @@ STREAM_PROFILES: dict[str, list[dict]] = {
 
 
 def selected_streams(profile: str | None = None) -> list[dict]:
-    selected = profile or os.getenv("MERCURY_MARKET_DATA_PROFILE", "coinbase_btc_eur")
+    selected = (
+        profile
+        if profile is not None
+        else os.getenv("MERCURY_MARKET_DATA_PROFILE", "coinbase_btc_eur")
+    )
+    assert selected is not None
     try:
         return STREAM_PROFILES[selected]
     except KeyError as exc:

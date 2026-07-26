@@ -1,37 +1,71 @@
 """
 NATS / JetStream helpers for Mercury.
 
-Changes from v0.1:
-  - get_nats_connection() is the single connection factory; get_jetstream()
-    calls it instead of opening a second connection (was a latent resource leak).
-  - publish_arrow() stamps Content-Type so consumers can detect binary frames
-    without a separate schema registry.
-  - publish_json() is a thin convenience wrapper kept for upstream-facing
-    subjects that expect plain JSON.
+Connections are returned as an owned session so every service has an explicit
+shutdown path. Stream setup distinguishes "missing" from broker/permission
+failures; services must not silently continue after an arbitrary NATS error.
 """
 
 from __future__ import annotations
 
 import json
 import os
+from dataclasses import dataclass
 
-import nats
 from dotenv import load_dotenv
 from nats.aio.client import Client as NatsClient
 from nats.js import JetStreamContext
+from nats.js.errors import NotFoundError
+
+import nats
 
 load_dotenv()
 
 _NATS_URL = os.getenv("NATS_URL", "nats://localhost:4222")
 
 
-async def get_nats_connection() -> NatsClient:
-    return await nats.connect(servers=[_NATS_URL])
+@dataclass(slots=True)
+class NatsSession:
+    """A JetStream context and the client connection that owns it."""
+
+    client: NatsClient
+    js: JetStreamContext
+
+    async def close(self) -> None:
+        if self.client.is_closed:
+            return
+        try:
+            await self.client.drain()
+        except Exception:
+            # Shutdown still needs to release sockets if a broker disappeared
+            # before subscriptions could be drained.
+            await self.client.close()
 
 
-async def get_jetstream() -> JetStreamContext:
-    nc = await get_nats_connection()
-    return nc.jetstream()
+async def connect_jetstream() -> NatsSession:
+    client = await nats.connect(servers=[_NATS_URL], drain_timeout=5)
+    return NatsSession(client=client, js=client.jetstream())
+
+
+async def ensure_stream(
+    js: JetStreamContext,
+    *,
+    name: str,
+    subjects: list[str],
+) -> None:
+    """Create a missing stream and reject incompatible existing definitions."""
+    try:
+        info = await js.stream_info(name)
+    except NotFoundError:
+        await js.add_stream(name=name, subjects=subjects)
+        return
+
+    configured_subjects = set(info.config.subjects or [])
+    if configured_subjects != set(subjects):
+        raise RuntimeError(
+            f"NATS stream {name!r} subjects are {sorted(configured_subjects)!r}; "
+            f"expected {sorted(subjects)!r}"
+        )
 
 
 async def publish_arrow(js: JetStreamContext, subject: str, arrow_bytes: bytes) -> None:
