@@ -9,8 +9,10 @@ from executor.risk_manager import (
     EXPOSURE_KEY,
     HALT_KEY,
     RISK_LIMITS_KEY,
+    RiskStateUnavailable,
     check_risk,
     default_risk_limits,
+    load_exposure,
     load_halt_flag,
     load_position_states,
     load_risk_limits,
@@ -40,10 +42,17 @@ class FakeEntry:
 
 
 class FakeKV:
-    def __init__(self, initial: dict[str, bytes] | None = None):
+    def __init__(
+        self,
+        initial: dict[str, bytes] | None = None,
+        get_error: Exception | None = None,
+    ):
         self.store = dict(initial or {})
+        self.get_error = get_error
 
     async def get(self, key: str) -> FakeEntry:
+        if self.get_error is not None:
+            raise self.get_error
         if key not in self.store:
             raise KeyError(key)
         return FakeEntry(self.store[key])
@@ -65,6 +74,37 @@ async def test_load_halt_flag_defaults_to_false_when_key_is_missing():
     js = FakeJetStream(FakeKV())
 
     assert await load_halt_flag(js) is False
+
+
+@pytest.mark.asyncio
+async def test_load_halt_flag_fails_safe_when_jetstream_is_unavailable():
+    js = FakeJetStream(FakeKV(get_error=RuntimeError("NATS unavailable")))
+
+    assert await load_halt_flag(js) is True
+
+
+@pytest.mark.asyncio
+async def test_load_halt_flag_fails_safe_when_value_is_invalid():
+    js = FakeJetStream(FakeKV({HALT_KEY: b"maybe"}))
+
+    assert await load_halt_flag(js) is True
+
+
+@pytest.mark.asyncio
+async def test_load_exposure_defaults_only_when_key_is_missing():
+    assert await load_exposure(FakeJetStream(FakeKV())) == 0.0
+
+    js = FakeJetStream(FakeKV(get_error=RuntimeError("NATS unavailable")))
+    with pytest.raises(RiskStateUnavailable, match="current exposure"):
+        await load_exposure(js)
+
+
+@pytest.mark.asyncio
+async def test_load_exposure_rejects_non_finite_state():
+    js = FakeJetStream(FakeKV({EXPOSURE_KEY: b"nan"}))
+
+    with pytest.raises(RiskStateUnavailable, match="current exposure"):
+        await load_exposure(js)
 
 
 @pytest.mark.asyncio
@@ -119,6 +159,39 @@ async def test_load_risk_limits_defaults_when_missing():
     limits = await load_risk_limits(js)
 
     assert limits == default_risk_limits()
+
+
+@pytest.mark.asyncio
+async def test_load_risk_limits_does_not_default_on_transport_failure():
+    js = FakeJetStream(FakeKV(get_error=RuntimeError("NATS unavailable")))
+
+    with pytest.raises(RiskStateUnavailable, match="risk limits"):
+        await load_risk_limits(js)
+
+
+@pytest.mark.asyncio
+async def test_load_risk_limits_rejects_invalid_numeric_state():
+    js = FakeJetStream(
+        FakeKV(
+            {
+                RISK_LIMITS_KEY: (
+                    b'{"max_exposure_dollars": "invalid", '
+                    b'"max_trade_notional_dollars": 200, "sentiment_score": 0}'
+                )
+            }
+        )
+    )
+
+    with pytest.raises(RiskStateUnavailable, match="risk limits"):
+        await load_risk_limits(js)
+
+
+@pytest.mark.asyncio
+async def test_load_position_states_does_not_hide_transport_failure():
+    js = FakeJetStream(FakeKV(get_error=RuntimeError("NATS unavailable")))
+
+    with pytest.raises(RiskStateUnavailable, match="position state"):
+        await load_position_states(js, ["BTC/USDT"])
 
 
 @pytest.mark.asyncio

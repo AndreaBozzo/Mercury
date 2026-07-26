@@ -8,6 +8,14 @@ from executor.exchange_client import ExecutionResult, execute_trade
 from executor.main import get_message_handler
 
 
+@pytest.fixture(autouse=True)
+def _allow_trading_when_handler_tests_do_not_exercise_halt(monkeypatch):
+    async def halt_disabled(_js):
+        return False
+
+    monkeypatch.setattr("executor.main.load_halt_flag", halt_disabled)
+
+
 def make_signal(action: Literal["BUY", "SELL"] = "BUY") -> TradeSignal:
     return TradeSignal(
         strategy_id="ma-cross",
@@ -161,9 +169,13 @@ async def test_message_handler_acks_on_successful_execution(monkeypatch):
         recorded_signals.append(_signal)
         return 500.0
 
+    async def fake_refresh_exposure(_js):
+        return None
+
     monkeypatch.setattr("executor.main.check_risk", fake_check_risk)
     monkeypatch.setattr("executor.main.execute_trade", fake_execute_trade)
     monkeypatch.setattr("executor.main.record_trade_execution", fake_record_trade_execution)
+    monkeypatch.setattr("executor.main._refresh_current_exposure", fake_refresh_exposure)
 
     handler = await get_message_handler(js=object())
     await handler(message)

@@ -2,9 +2,11 @@ import logging
 import os
 from collections.abc import Mapping
 from json import dumps, loads
+from math import isfinite
 from typing import Any
 
 from nats.js import JetStreamContext
+from nats.js.errors import KeyDeletedError, KeyNotFoundError
 
 from core.schemas import TradeSignal
 
@@ -21,15 +23,27 @@ RISK_LIMITS_KEY = "risk_limits"
 AVAILABLE_BALANCE_KEY = "available_balance"
 
 
+class RiskStateUnavailable(RuntimeError):
+    """Raised when risk state cannot be read reliably from JetStream."""
+
+
+_MISSING_KEY_ERRORS = (KeyError, KeyNotFoundError, KeyDeletedError)
+
+
 async def load_exposure(js: JetStreamContext) -> float:
     try:
         kv = await js.key_value(KV_BUCKET)
         entry = await kv.get(EXPOSURE_KEY)
         if entry.value is None:
             return 0.0
-        return float(entry.value.decode())
-    except Exception:
+        exposure = float(entry.value.decode())
+        if not isfinite(exposure) or exposure < 0:
+            raise ValueError("current exposure must be finite and non-negative")
+        return exposure
+    except _MISSING_KEY_ERRORS:
         return 0.0
+    except Exception as exc:
+        raise RiskStateUnavailable("Unable to read current exposure from JetStream") from exc
 
 
 async def save_exposure(js: JetStreamContext, new_exposure: float):
@@ -56,10 +70,12 @@ async def load_risk_limits(js: JetStreamContext) -> dict[str, float | int | str]
 
         raw = loads(entry.value.decode())
         if not isinstance(raw, dict):
-            return default_risk_limits()
+            raise ValueError("risk limits must be a JSON object")
         return _coerce_risk_limits(raw)
-    except Exception:
+    except _MISSING_KEY_ERRORS:
         return default_risk_limits()
+    except Exception as exc:
+        raise RiskStateUnavailable("Unable to read risk limits from JetStream") from exc
 
 
 async def save_risk_limits(
@@ -80,20 +96,26 @@ async def load_position_states(
     for symbol in symbols:
         try:
             entry = await kv.get(_position_state_key(symbol))
-        except Exception:
+        except _MISSING_KEY_ERRORS:
             continue
+        except Exception as exc:
+            raise RiskStateUnavailable(
+                f"Unable to read persisted position state for {symbol}"
+            ) from exc
 
         if entry.value is None:
             continue
 
         try:
             raw = loads(entry.value.decode())
-        except Exception:
-            logger.warning("Failed to decode persisted position state for %s", symbol)
-            continue
+        except Exception as exc:
+            raise RiskStateUnavailable(
+                f"Unable to decode persisted position state for {symbol}"
+            ) from exc
 
-        if isinstance(raw, dict):
-            states[symbol] = raw
+        if not isinstance(raw, dict):
+            raise RiskStateUnavailable(f"Persisted position state for {symbol} is not an object")
+        states[symbol] = raw
 
     return states
 
@@ -131,10 +153,12 @@ async def load_available_balance(
             return None
         raw = loads(entry.value.decode())
         if not isinstance(raw, dict):
-            return None
+            raise ValueError("available balance must be a JSON object")
         return raw
-    except Exception:
+    except _MISSING_KEY_ERRORS:
         return None
+    except Exception as exc:
+        raise RiskStateUnavailable("Unable to read available balance from JetStream") from exc
 
 
 async def load_halt_flag(js: JetStreamContext) -> bool:
@@ -143,9 +167,18 @@ async def load_halt_flag(js: JetStreamContext) -> bool:
         entry = await kv.get(HALT_KEY)
         if entry.value is None:
             return False
-        return entry.value.decode().strip().lower() in {"1", "true", "yes", "on"}
-    except Exception:
+        value = entry.value.decode().strip().lower()
+        if value in {"1", "true", "yes", "on"}:
+            return True
+        if value in {"0", "false", "no", "off"}:
+            return False
+        logger.error("HALT flag contains an invalid value; failing safe with HALT enabled.")
+        return True
+    except _MISSING_KEY_ERRORS:
         return False
+    except Exception:
+        logger.exception("Unable to read HALT flag; failing safe with HALT enabled.")
+        return True
 
 
 async def check_risk(signal: TradeSignal, js: JetStreamContext) -> bool:
@@ -223,15 +256,15 @@ def _coerce_risk_limits(
 
     max_exposure = _positive_float(
         raw.get("max_exposure_dollars"),
-        fallback=float(defaults["max_exposure_dollars"]),
+        field="max_exposure_dollars",
     )
     max_trade_notional = _positive_float(
         raw.get("max_trade_notional_dollars"),
-        fallback=float(defaults["max_trade_notional_dollars"]),
+        field="max_trade_notional_dollars",
     )
     sentiment_score = _bounded_float(
         raw.get("sentiment_score"),
-        fallback=0.0,
+        field="sentiment_score",
         minimum=-1.0,
         maximum=1.0,
     )
@@ -247,19 +280,30 @@ def _coerce_risk_limits(
     }
 
 
-def _positive_float(value, fallback: float) -> float:
+def _positive_float(value: float | int | str | None, field: str) -> float:
+    if value is None:
+        raise ValueError(f"{field} must be a positive finite number")
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
-        return fallback
-    if parsed <= 0:
-        return fallback
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a positive finite number") from exc
+    if not isfinite(parsed) or parsed <= 0:
+        raise ValueError(f"{field} must be a positive finite number")
     return parsed
 
 
-def _bounded_float(value, fallback: float, minimum: float, maximum: float) -> float:
+def _bounded_float(
+    value: float | int | str | None,
+    field: str,
+    minimum: float,
+    maximum: float,
+) -> float:
+    if value is None:
+        raise ValueError(f"{field} must be a finite number")
     try:
         parsed = float(value)
-    except (TypeError, ValueError):
-        return fallback
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a finite number") from exc
+    if not isfinite(parsed):
+        raise ValueError(f"{field} must be a finite number")
     return max(minimum, min(maximum, parsed))
