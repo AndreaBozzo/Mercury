@@ -2,7 +2,7 @@ services:
   nats:
     build:
       context: .
-      dockerfile: nats.Dockerfile
+      dockerfile: Dockerfile.nats
     image: mercury-nats:2.14.3
     init: true
     read_only: true
