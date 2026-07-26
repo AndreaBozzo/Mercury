@@ -22,13 +22,13 @@ git clone https://github.com/AndreaBozzo/Mercury.git
 cd Mercury
 git checkout <release-commit>
 uv sync --locked
-make check
+uv run python -m scripts.check
 git status --short
 ```
 
-- [ ] `make check` passes from the clean clone.
-- [ ] The unit/component suite reports 241 passes when no external broker is configured.
-- [ ] CI reports 243 passes when its real-NATS integration environment is enabled.
+- [ ] The portable source gate passes from the clean clone.
+- [ ] The unit/component suite reports 243 passes when no external broker is configured.
+- [ ] CI reports 245 passes when its real-NATS integration environment is enabled.
 - [ ] The source tree is clean after checks, except ignored build/test artifacts.
 - [ ] The built source and wheel metadata both identify Apache-2.0.
 

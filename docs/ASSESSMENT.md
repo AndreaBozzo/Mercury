@@ -47,7 +47,7 @@ regressions, not proof of trading safety.
 
 | Check | Result on 2026-07-26 |
 |---|---|
-| Unit/component tests | 241 passed; 2 external-service tests skipped without a broker |
+| Unit/component tests | 243 passed; 2 external-service tests skipped without a broker |
 | Real JetStream integration | 2 passed against pinned NATS 2.14.3 |
 | Runtime-only branch-aware coverage | 71% overall |
 | Lowest runtime-module coverage | Bytewax 32%, provisioning 35%, Ray runner 36%, Brain entrypoint 52% |
@@ -131,6 +131,7 @@ This section records engineering constraints and primary-source context; it is n
 
 - Runtime packages build into source and wheel distributions.
 - CI runs lint, format, mypy, tests, build, and dependency audit.
+- The same complete gate has a cross-platform Python entrypoint; GNU Make is optional.
 - Third-party GitHub actions and the uv version are pinned.
 - The reviewed locked runtime dependency set has no known `pip-audit` advisories.
 - Executor risk and mode transitions have focused regression tests.

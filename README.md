@@ -173,10 +173,11 @@ The repository still lacks the safeguards listed in the roadmap.
 ## Development checks
 
 ```bash
-make check
+uv run python -m scripts.check
 ```
 
-CI enforces:
+This is the cross-platform canonical gate; `make check` is a convenience alias where GNU Make is
+installed. CI enforces the same checks:
 
 - Ruff lint and formatting
 - mypy across all runtime packages

@@ -17,7 +17,7 @@ Security and conduct reports do not belong in public issues. Follow [SECURITY.md
 1. Create a focused branch from `master`.
 2. Install the locked development environment with `uv sync --locked`.
 3. Add a regression test for behavioral changes.
-4. Run `make check`.
+4. Run `uv run python -m scripts.check`.
 5. Open a pull request that explains the failure mode, the chosen semantics, and any remaining
    limitation.
 
@@ -48,7 +48,7 @@ at a shared or production broker.
 Mercury uses Ruff, mypy, pytest, `pip-audit`, and package builds in CI. The canonical local gate is:
 
 ```bash
-make check
+uv run python -m scripts.check
 ```
 
 Use typed domain models at service boundaries. Prefer explicit failure behavior over broad

@@ -43,7 +43,8 @@ audit:
 build:
 	uv build
 
-check: lint fmt-check typecheck test audit build
+check:
+	uv run python -m scripts.check
 
 run-brain:
 	uv run python -m brain.main
