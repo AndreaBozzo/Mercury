@@ -13,7 +13,7 @@ from executor.exchange_client import (
     fetch_open_orders,
     fetch_portfolio_snapshot,
     get_reconcile_symbols,
-    is_dry_run_enabled,
+    is_observe_mode_enabled,
 )
 from executor.observability import health_payload, json_response, metrics_payload
 from executor.risk_manager import (
@@ -58,7 +58,7 @@ async def _refresh_current_exposure(js) -> None:
 
 
 async def _refresh_runtime_state(js) -> None:
-    if is_dry_run_enabled():
+    if is_observe_mode_enabled():
         await _refresh_current_exposure(js)
         _set_position_pnl(0.0)
         return
@@ -165,8 +165,8 @@ async def ensure_wallet_bucket(js):
 
 
 async def reconcile_startup_state(js):
-    if is_dry_run_enabled():
-        logger.info("DRY_RUN enabled; skipping exchange reconciliation.")
+    if is_observe_mode_enabled():
+        logger.info("Observation mode enabled; skipping exchange reconciliation.")
         return
 
     current_exposure = await load_exposure(js)
@@ -212,7 +212,7 @@ async def get_message_handler(js):
                 await msg.ack()
                 return
 
-            if is_dry_run_enabled():
+            if is_observe_mode_enabled():
                 sized_signal = signal
             else:
                 decision = await size_signal(signal, js)

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import statistics
 from collections import deque
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from core.schemas import INTENT_PLACEHOLDER_QTY, MarketEvent, TradeSignal
@@ -86,7 +86,7 @@ class MovingAverageStrategy:
             price=price,
             confidence_score=confidence,
             allocation_percentage=0.1 * confidence * 100,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(UTC),
         )
 
 

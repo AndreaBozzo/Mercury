@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import deque
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 from core.schemas import INTENT_PLACEHOLDER_QTY, MarketEvent, TradeSignal
@@ -97,7 +97,7 @@ class OrderBookVwapImbalanceStrategy:
             price=price,
             confidence_score=confidence,
             allocation_percentage=min(100.0, confidence * 10.0),
-            timestamp=datetime.now(),
+            timestamp=datetime.now(UTC),
         )
 
     def _current_vwap(self) -> float | None:

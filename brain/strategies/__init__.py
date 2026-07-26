@@ -7,7 +7,7 @@ from brain.strategies.order_book_vwap_imbalance import OrderBookVwapImbalanceStr
 
 
 def build_strategy_from_env():
-    strategy_name = os.getenv("BRAIN_STRATEGY", "order_book_vwap_imbalance").strip().lower()
+    strategy_name = os.getenv("BRAIN_STRATEGY", "moving_average").strip().lower()
 
     if strategy_name in {"moving_average", "ma"}:
         return MovingAverageStrategy()

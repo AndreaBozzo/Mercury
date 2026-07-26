@@ -25,10 +25,12 @@ def normalize_symbol(raw: str | None) -> str:
     if not symbol:
         raise ValueError("symbol must be a non-empty string")
 
-    if "/" in symbol:
-        base, quote = symbol.split("/", 1)
-        if base and quote:
-            return f"{base}/{quote}"
+    for separator in ("/", "-", "_"):
+        if separator not in symbol:
+            continue
+        parts = symbol.split(separator)
+        if len(parts) == 2 and all(parts):
+            return f"{parts[0]}/{parts[1]}"
         raise ValueError(f"invalid symbol format: {raw!r}")
 
     for quote in _KNOWN_QUOTES:

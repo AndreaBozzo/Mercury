@@ -4,7 +4,7 @@ import pytest
 
 import brain.main as brain_main
 from brain.adapters.binance_depth import BinanceDepthBootstrapper, BinanceDepthSnapshot
-from brain.main import handle_market_event
+from brain.main import _broker_stream_sequence, handle_market_event
 from core.order_book import OrderBook
 from core.schemas import MarketEvent
 
@@ -15,6 +15,14 @@ class FakeJetStream:
 
     async def publish(self, subject: str, payload: bytes):
         self.published.append((subject, payload))
+
+
+def test_broker_stream_sequence_extracts_jetstream_sequence_pair():
+    sequence = type("Sequence", (), {"stream": 42, "consumer": 7})()
+    metadata = type("Metadata", (), {"sequence": sequence})()
+    message = type("Message", (), {"metadata": metadata})()
+
+    assert _broker_stream_sequence(message) == 42
 
 
 @pytest.mark.asyncio

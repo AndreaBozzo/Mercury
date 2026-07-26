@@ -180,7 +180,7 @@ async def test_refresh_runtime_state_uses_exchange_snapshot(monkeypatch):
 
     monkeypatch.setattr(executor_main, "_current_exposure", 0.0)
     monkeypatch.setattr(executor_main, "_position_pnl", 0.0)
-    monkeypatch.setattr(executor_main, "is_dry_run_enabled", lambda: False)
+    monkeypatch.setattr(executor_main, "is_observe_mode_enabled", lambda: False)
     monkeypatch.setattr(executor_main, "get_reconcile_symbols", lambda: ["BTC/USDT"])
 
     async def fake_fetch_portfolio_snapshot(_symbols, persisted_positions=None):

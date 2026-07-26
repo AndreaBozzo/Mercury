@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from core.symbols import normalize_symbol
 
@@ -27,6 +27,8 @@ class MarketEvent(BaseModel):
 
 
 class TradeSignal(BaseModel):
+    model_config = ConfigDict(allow_inf_nan=False)
+
     strategy_id: str
     symbol: str
     action: Literal["BUY", "SELL"]
@@ -58,6 +60,8 @@ class TradeSignal(BaseModel):
 class OrderBookSnapshot(BaseModel):
     """Full L2 snapshot.  Expected MarketEvent.type == 'l2_snapshot'."""
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     source: str
     symbol: str
     seq: int | None = Field(default=None, ge=0)
@@ -75,6 +79,8 @@ class OrderBookDelta(BaseModel):
     """Incremental L2 update.  Expected MarketEvent.type == 'l2_delta'.
     qty == 0.0 means the price level should be removed."""
 
+    model_config = ConfigDict(allow_inf_nan=False)
+
     source: str
     symbol: str
     seq: int | None = Field(default=None, ge=0)
@@ -91,6 +97,8 @@ class OrderBookDelta(BaseModel):
 
 class L2Features(BaseModel):
     """Derived microstructure features emitted after each order book update."""
+
+    model_config = ConfigDict(allow_inf_nan=False)
 
     symbol: str
     timestamp: int

@@ -37,6 +37,7 @@ _book_gap_counts: dict[str, int] = {}
 _strategy = build_strategy_from_env()
 _BRAIN_HTTP_HOST = os.getenv("BRAIN_HTTP_HOST", "127.0.0.1")
 _BRAIN_HTTP_PORT = int(os.getenv("BRAIN_HTTP_PORT", "9108"))
+_BRAIN_SUBJECT = os.getenv("BRAIN_SUBJECT", "nephtys.stream.crypto.btc")
 
 
 def _book(symbol: str) -> OrderBook:
@@ -62,6 +63,16 @@ def _record_signal_emitted(action: str, symbol: str) -> None:
 
 def _record_book_gap(symbol: str) -> None:
     _book_gap_counts[symbol] = _book_gap_counts.get(symbol, 0) + 1
+
+
+def _broker_stream_sequence(msg) -> int | None:
+    metadata = getattr(msg, "metadata", None)
+    sequence = getattr(metadata, "sequence", None)
+    raw = getattr(sequence, "stream", sequence)
+    try:
+        return int(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _event_with_book_features(event: MarketEvent) -> MarketEvent:
@@ -167,7 +178,7 @@ async def main() -> None:
             data = json.loads(msg.data.decode())
             event = MarketEvent(**data)
 
-            await handle_market_event(event, js, msg.metadata.sequence)
+            await handle_market_event(event, js, _broker_stream_sequence(msg))
 
             await msg.ack()
 
@@ -175,7 +186,7 @@ async def main() -> None:
             logger.error("Error in market_handler: %s", exc, exc_info=True)
 
     await js.subscribe(
-        "nephtys.stream.crypto.btc",
+        _BRAIN_SUBJECT,
         durable="brain_service",
         cb=market_handler,
     )

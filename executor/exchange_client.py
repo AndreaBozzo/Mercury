@@ -3,11 +3,12 @@ import logging
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import ccxt.async_support as ccxt
 from dotenv import load_dotenv
 
+from core.config import env_bool
 from core.schemas import TradeSignal
 from core.symbols import normalize_symbol, split_symbol
 
@@ -17,11 +18,18 @@ ORDER_CONFIRM_ATTEMPTS = int(os.getenv("ORDER_CONFIRM_ATTEMPTS", "5"))
 ORDER_CONFIRM_DELAY_SECONDS = float(os.getenv("ORDER_CONFIRM_DELAY_SECONDS", "1.0"))
 TRADE_HISTORY_PAGE_LIMIT = int(os.getenv("TRADE_HISTORY_PAGE_LIMIT", "200"))
 TRADE_HISTORY_MAX_PAGES = int(os.getenv("TRADE_HISTORY_MAX_PAGES", "25"))
+LIVE_TRADING_CONFIRMATION = "I_UNDERSTAND_REAL_FUNDS_ARE_AT_RISK"
+
+ExecutionMode = Literal["observe", "sandbox", "live"]
+
+
+class ExchangeConfigurationError(RuntimeError):
+    """Raised when execution settings do not satisfy Mercury's safety gates."""
 
 
 @dataclass(frozen=True)
 class ExecutionResult:
-    status: Literal["dry_run", "filled"]
+    status: Literal["observed", "filled"]
     order_id: str | None = None
     order: dict[str, Any] | None = None
 
@@ -54,40 +62,100 @@ class PersistedPositionState:
 
 
 def _env_flag(name: str, default: bool) -> bool:
-    value = os.getenv(name)
-    if value is None:
-        return default
+    try:
+        return env_bool(name, default)
+    except ValueError as exc:
+        raise ExchangeConfigurationError(str(exc)) from exc
 
-    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+def get_execution_mode() -> ExecutionMode:
+    configured = os.getenv("EXECUTION_MODE")
+    if configured is not None:
+        mode = configured.strip().lower()
+        if mode not in {"observe", "sandbox", "live"}:
+            raise ExchangeConfigurationError(
+                "EXECUTION_MODE must be one of: observe, sandbox, live"
+            )
+        return cast(ExecutionMode, mode)
+
+    # Backward-compatible migration for private pre-alpha deployments.
+    if _env_flag("DRY_RUN", default=True):
+        return "observe"
+    return "sandbox" if _env_flag("BINANCE_SANDBOX", default=True) else "live"
+
+
+def is_observe_mode_enabled() -> bool:
+    return get_execution_mode() == "observe"
 
 
 def is_dry_run_enabled() -> bool:
-    return _env_flag("DRY_RUN", default=True)
+    """Deprecated compatibility alias; use is_observe_mode_enabled()."""
+    return is_observe_mode_enabled()
 
 
 def get_reconcile_symbols() -> list[str]:
-    raw = os.getenv("EXECUTOR_RECONCILE_SYMBOLS", "BTC/USDT")
+    raw = os.getenv("EXECUTOR_RECONCILE_SYMBOLS", "BTC/EUR")
     return [normalize_symbol(symbol.strip()) for symbol in raw.split(",") if symbol.strip()]
 
 
 def get_exchange() -> ccxt.Exchange:
-    api_key = os.getenv("BINANCE_API_KEY")
-    secret_key = os.getenv("BINANCE_SECRET_KEY")
+    mode = get_execution_mode()
+    if mode == "observe":
+        raise ExchangeConfigurationError("Observation mode does not create an exchange client")
 
-    exchange = ccxt.binance(
-        {
-            "apiKey": api_key,
-            "secret": secret_key,
-            "enableRateLimit": True,
-        }
-    )
+    exchange_id = os.getenv("EXECUTION_EXCHANGE_ID", "").strip().lower()
+    if not exchange_id and (os.getenv("BINANCE_API_KEY") or os.getenv("BINANCE_SECRET_KEY")):
+        exchange_id = "binance"
+        logger.warning(
+            "Using deprecated BINANCE_* credential variables; "
+            "migrate to generic EXCHANGE_* settings."
+        )
+    if not exchange_id:
+        raise ExchangeConfigurationError(
+            "EXECUTION_EXCHANGE_ID is required for sandbox or live execution"
+        )
 
-    # Sandbox is the default; flip BINANCE_SANDBOX=false explicitly for mainnet.
-    use_sandbox = _env_flag("BINANCE_SANDBOX", default=True)
-    if use_sandbox:
-        exchange.set_sandbox_mode(True)
+    if mode == "live" and os.getenv("LIVE_TRADING_CONFIRMATION") != LIVE_TRADING_CONFIRMATION:
+        raise ExchangeConfigurationError(
+            f"Live execution requires LIVE_TRADING_CONFIRMATION={LIVE_TRADING_CONFIRMATION}"
+        )
+
+    api_key = os.getenv("EXCHANGE_API_KEY")
+    secret_key = os.getenv("EXCHANGE_SECRET")
+    if exchange_id == "binance":
+        api_key = api_key or os.getenv("BINANCE_API_KEY")
+        secret_key = secret_key or os.getenv("BINANCE_SECRET_KEY")
+    if not api_key or not secret_key:
+        raise ExchangeConfigurationError(
+            "EXCHANGE_API_KEY and EXCHANGE_SECRET are required for sandbox or live execution"
+        )
+
+    exchange_type = getattr(ccxt, exchange_id, None)
+    if exchange_id not in ccxt.exchanges or exchange_type is None or not callable(exchange_type):
+        raise ExchangeConfigurationError(f"Unsupported CCXT exchange id: {exchange_id!r}")
+
+    config: dict[str, Any] = {
+        "apiKey": api_key,
+        "secret": secret_key,
+        "enableRateLimit": True,
+    }
+    password = os.getenv("EXCHANGE_PASSWORD")
+    if password:
+        config["password"] = password
+
+    exchange = exchange_type(config)
+    if mode == "sandbox":
+        try:
+            exchange.set_sandbox_mode(True)
+        except Exception as exc:
+            raise ExchangeConfigurationError(
+                f"Exchange {exchange_id!r} does not provide a usable CCXT sandbox"
+            ) from exc
     else:
-        logger.warning("BINANCE_SANDBOX=false — executor is targeting MAINNET. Real funds at risk.")
+        logger.critical(
+            "EXECUTION_MODE=live — executor is targeting %s with REAL FUNDS.",
+            exchange_id,
+        )
     return exchange
 
 
@@ -217,21 +285,27 @@ async def execute_trade(signal: TradeSignal) -> ExecutionResult:
     """
     Executes a trade on the exchange using CCXT.
     """
+    if is_observe_mode_enabled():
+        logger.info(
+            "Observed %s %.6f %s; no exchange client or order was created.",
+            signal.action,
+            signal.quantity,
+            signal.symbol,
+        )
+        return ExecutionResult(status="observed")
+
     exchange = get_exchange()
-    dry_run = is_dry_run_enabled()
+    mode = get_execution_mode()
     logger.info(
         "Executing %s %.6f %s on %s (%s)...",
         signal.action,
         signal.quantity,
         signal.symbol,
         exchange.id,
-        "DRY_RUN" if dry_run else "SANDBOX",
+        mode.upper(),
     )
 
     try:
-        if dry_run:
-            return ExecutionResult(status="dry_run")
-
         if signal.action == "BUY":
             order = await exchange.create_market_buy_order(signal.symbol, signal.quantity)
         else:

@@ -1,5 +1,4 @@
 import logging
-import os
 from collections.abc import Mapping
 from json import dumps, loads
 from math import isfinite
@@ -8,13 +7,20 @@ from typing import Any
 from nats.js import JetStreamContext
 from nats.js.errors import KeyDeletedError, KeyNotFoundError
 
+from core.config import env_positive_float
 from core.schemas import TradeSignal
 
 logger = logging.getLogger("risk_manager")
 
 VIRTUAL_BALANCE = 10000.0  # Max exposure for safety
-DEFAULT_MAX_EXPOSURE_DOLLARS = float(os.getenv("MAX_EXPOSURE_DOLLARS", str(VIRTUAL_BALANCE)))
-DEFAULT_MAX_TRADE_NOTIONAL_DOLLARS = float(os.getenv("MAX_TRADE_NOTIONAL_DOLLARS", "1000"))
+DEFAULT_MAX_EXPOSURE_DOLLARS = env_positive_float(
+    "MAX_EXPOSURE_DOLLARS",
+    VIRTUAL_BALANCE,
+)
+DEFAULT_MAX_TRADE_NOTIONAL_DOLLARS = env_positive_float(
+    "MAX_TRADE_NOTIONAL_DOLLARS",
+    1000.0,
+)
 KV_BUCKET = "mercury_wallet_state"
 EXPOSURE_KEY = "current_exposure"
 HALT_KEY = "HALT"

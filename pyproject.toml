@@ -29,7 +29,7 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["backtesting*", "brain*", "core*", "executor*", "plutarch*"]
+include = ["backtesting*", "brain*", "core*", "executor*", "plutarch*", "scripts*"]
 exclude = ["tests*"]
 
 [dependency-groups]

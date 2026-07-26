@@ -59,7 +59,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Literal
 
 import bytewax.operators as op
@@ -333,7 +333,7 @@ def _emit_signal(kv: tuple[str, dict]) -> tuple[str, TradeSignal | None]:
         price=price,
         confidence_score=confidence,
         allocation_percentage=0.1 * confidence * 100,
-        timestamp=datetime.now(),
+        timestamp=datetime.now(UTC),
     )
     return (symbol, signal)
 

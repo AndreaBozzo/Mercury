@@ -4,7 +4,7 @@ from executor.main import reconcile_startup_state
 
 
 @pytest.mark.asyncio
-async def test_reconcile_startup_state_skips_exchange_checks_in_dry_run(monkeypatch):
+async def test_reconcile_startup_state_skips_exchange_checks_in_observe_mode(monkeypatch):
     called = False
 
     async def fake_fetch_open_orders(_symbol):
@@ -12,7 +12,7 @@ async def test_reconcile_startup_state_skips_exchange_checks_in_dry_run(monkeypa
         called = True
         return []
 
-    monkeypatch.setattr("executor.main.is_dry_run_enabled", lambda: True)
+    monkeypatch.setattr("executor.main.is_observe_mode_enabled", lambda: True)
     monkeypatch.setattr("executor.main.fetch_open_orders", fake_fetch_open_orders)
 
     await reconcile_startup_state(js=object())
@@ -31,7 +31,7 @@ async def test_reconcile_startup_state_accepts_clean_exchange_state(monkeypatch)
     async def fake_load_exposure(_js):
         return 250.0
 
-    monkeypatch.setattr("executor.main.is_dry_run_enabled", lambda: False)
+    monkeypatch.setattr("executor.main.is_observe_mode_enabled", lambda: False)
     monkeypatch.setattr("executor.main.get_reconcile_symbols", lambda: ["BTC/USDT", "ETH/USDT"])
     monkeypatch.setattr("executor.main.fetch_open_orders", fake_fetch_open_orders)
     monkeypatch.setattr("executor.main.load_exposure", fake_load_exposure)
@@ -51,7 +51,7 @@ async def test_reconcile_startup_state_fails_closed_when_open_orders_exist(monke
     async def fake_load_exposure(_js):
         return 250.0
 
-    monkeypatch.setattr("executor.main.is_dry_run_enabled", lambda: False)
+    monkeypatch.setattr("executor.main.is_observe_mode_enabled", lambda: False)
     monkeypatch.setattr("executor.main.get_reconcile_symbols", lambda: ["BTC/USDT", "ETH/USDT"])
     monkeypatch.setattr("executor.main.fetch_open_orders", fake_fetch_open_orders)
     monkeypatch.setattr("executor.main.load_exposure", fake_load_exposure)

@@ -71,9 +71,20 @@ class TestTradeSignal:
         with pytest.raises(ValidationError):
             TradeSignal(**_signal(quantity=0))
 
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+    def test_non_finite_trade_values_are_rejected(self, value):
+        with pytest.raises(ValidationError):
+            TradeSignal(**_signal(quantity=value))
+        with pytest.raises(ValidationError):
+            TradeSignal(**_signal(price=value))
+
     def test_symbol_is_normalized(self):
         sig = TradeSignal(**_signal(symbol="BTCUSDT"))
         assert sig.symbol == "BTC/USDT"
+
+    def test_coinbase_hyphenated_symbol_is_normalized(self):
+        sig = TradeSignal(**_signal(symbol="btc-eur"))
+        assert sig.symbol == "BTC/EUR"
 
     def test_invalid_symbol_is_rejected(self):
         with pytest.raises(ValidationError):

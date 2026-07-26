@@ -65,18 +65,18 @@ class FakeExchange:
 
 
 @pytest.mark.asyncio
-async def test_execute_trade_returns_dry_run_without_submitting_orders(monkeypatch):
+async def test_execute_trade_observes_without_creating_exchange_or_submitting_orders(monkeypatch):
     exchange = FakeExchange()
 
     monkeypatch.setattr("executor.exchange_client.get_exchange", lambda: exchange)
-    monkeypatch.setattr("executor.exchange_client.is_dry_run_enabled", lambda: True)
+    monkeypatch.setattr("executor.exchange_client.is_observe_mode_enabled", lambda: True)
 
     result = await execute_trade(make_signal())
 
-    assert result == ExecutionResult(status="dry_run")
+    assert result == ExecutionResult(status="observed")
     assert exchange.buy_calls == []
     assert exchange.sell_calls == []
-    assert exchange.closed is True
+    assert exchange.closed is False
 
 
 @pytest.mark.asyncio
@@ -87,7 +87,8 @@ async def test_execute_trade_submits_market_buy_when_dry_run_disabled(monkeypatc
     ]
 
     monkeypatch.setattr("executor.exchange_client.get_exchange", lambda: exchange)
-    monkeypatch.setattr("executor.exchange_client.is_dry_run_enabled", lambda: False)
+    monkeypatch.setattr("executor.exchange_client.is_observe_mode_enabled", lambda: False)
+    monkeypatch.setattr("executor.exchange_client.get_execution_mode", lambda: "sandbox")
     monkeypatch.setattr("executor.exchange_client.ORDER_CONFIRM_DELAY_SECONDS", 0.0)
 
     result = await execute_trade(make_signal(action="BUY"))
@@ -108,7 +109,8 @@ async def test_execute_trade_submits_market_sell_when_dry_run_disabled(monkeypat
     ]
 
     monkeypatch.setattr("executor.exchange_client.get_exchange", lambda: exchange)
-    monkeypatch.setattr("executor.exchange_client.is_dry_run_enabled", lambda: False)
+    monkeypatch.setattr("executor.exchange_client.is_observe_mode_enabled", lambda: False)
+    monkeypatch.setattr("executor.exchange_client.get_execution_mode", lambda: "sandbox")
     monkeypatch.setattr("executor.exchange_client.ORDER_CONFIRM_DELAY_SECONDS", 0.0)
 
     result = await execute_trade(make_signal(action="SELL"))
@@ -130,7 +132,8 @@ async def test_execute_trade_raises_when_fill_is_not_confirmed(monkeypatch):
     ]
 
     monkeypatch.setattr("executor.exchange_client.get_exchange", lambda: exchange)
-    monkeypatch.setattr("executor.exchange_client.is_dry_run_enabled", lambda: False)
+    monkeypatch.setattr("executor.exchange_client.is_observe_mode_enabled", lambda: False)
+    monkeypatch.setattr("executor.exchange_client.get_execution_mode", lambda: "sandbox")
     monkeypatch.setattr("executor.exchange_client.ORDER_CONFIRM_ATTEMPTS", 2)
     monkeypatch.setattr("executor.exchange_client.ORDER_CONFIRM_DELAY_SECONDS", 0.0)
 
@@ -163,7 +166,7 @@ async def test_message_handler_acks_on_successful_execution(monkeypatch):
         return True
 
     async def fake_execute_trade(_signal):
-        return ExecutionResult(status="dry_run")
+        return ExecutionResult(status="observed")
 
     async def fake_record_trade_execution(_signal, _js):
         recorded_signals.append(_signal)
@@ -251,7 +254,7 @@ async def test_message_handler_skips_when_sizer_rejects(monkeypatch):
         execute_calls.append(_signal)
         return ExecutionResult(status="filled", order_id="x")
 
-    monkeypatch.setattr("executor.main.is_dry_run_enabled", lambda: False)
+    monkeypatch.setattr("executor.main.is_observe_mode_enabled", lambda: False)
     monkeypatch.setattr("executor.main.check_risk", fake_check_risk)
     monkeypatch.setattr("executor.main.size_signal", fake_size_signal)
     monkeypatch.setattr("executor.main.execute_trade", fake_execute_trade)
@@ -290,7 +293,7 @@ async def test_message_handler_passes_sized_signal_to_execute(monkeypatch):
     async def fake_refresh(_js):
         return None
 
-    monkeypatch.setattr("executor.main.is_dry_run_enabled", lambda: False)
+    monkeypatch.setattr("executor.main.is_observe_mode_enabled", lambda: False)
     monkeypatch.setattr("executor.main.check_risk", fake_check_risk)
     monkeypatch.setattr("executor.main.size_signal", fake_size_signal)
     monkeypatch.setattr("executor.main.execute_trade", fake_execute_trade)

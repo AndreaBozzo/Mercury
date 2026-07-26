@@ -25,7 +25,6 @@ Week 1 MVP scope:
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from json import loads
@@ -33,6 +32,7 @@ from typing import Any, Literal
 
 from nats.js import JetStreamContext
 
+from core.config import ConfigurationError, env_bool, env_positive_float
 from core.schemas import TradeSignal
 from core.symbols import normalize_symbol, split_symbol
 from executor.exchange_client import get_exchange
@@ -50,15 +50,14 @@ def _as_float(value: Any) -> float | None:
         return None
 
 
-SIZING_FIXED_FRACTION = float(os.getenv("SIZING_FIXED_FRACTION", "0.25"))
-MAX_NOTIONAL_EUR = float(os.getenv("MAX_NOTIONAL_EUR", "5.5"))
-SIZING_BALANCE_ASSET = os.getenv("SIZING_BALANCE_ASSET", "EUR").upper()
-SIZING_BALANCE_MAX_AGE_SECONDS = float(os.getenv("SIZING_BALANCE_MAX_AGE_SECONDS", "60"))
-VOL_MODULATOR_MAX_AGE_SECONDS = float(os.getenv("VOL_MODULATOR_MAX_AGE_SECONDS", "60"))
-SIZING_REQUIRE_VOL_MODULATOR = os.getenv(
-    "SIZING_REQUIRE_VOL_MODULATOR", "false"
-).strip().lower() in {"1", "true", "yes", "on"}
-RISK_EUR_PER_QUOTE = float(os.getenv("RISK_EUR_PER_QUOTE", "0.92"))  # 1 USDT ≈ 0.92 EUR
+SIZING_FIXED_FRACTION = env_positive_float("SIZING_FIXED_FRACTION", 0.25)
+if SIZING_FIXED_FRACTION > 1:
+    raise ConfigurationError("SIZING_FIXED_FRACTION must be less than or equal to 1")
+MAX_NOTIONAL_EUR = env_positive_float("MAX_NOTIONAL_EUR", 5.5)
+SIZING_BALANCE_MAX_AGE_SECONDS = env_positive_float("SIZING_BALANCE_MAX_AGE_SECONDS", 60)
+VOL_MODULATOR_MAX_AGE_SECONDS = env_positive_float("VOL_MODULATOR_MAX_AGE_SECONDS", 60)
+SIZING_REQUIRE_VOL_MODULATOR = env_bool("SIZING_REQUIRE_VOL_MODULATOR", True)
+RISK_EUR_PER_QUOTE = env_positive_float("RISK_EUR_PER_QUOTE", 0.92)  # 1 USDT ≈ 0.92 EUR
 
 VOL_MODULATOR_KEY = "vol_modulator"
 AVAILABLE_BALANCE_KEY = "available_balance"
