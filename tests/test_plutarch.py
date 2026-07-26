@@ -13,6 +13,7 @@ and use plain Python dicts as JetStream message stand-ins.
 
 from __future__ import annotations
 
+import base64
 import json
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,7 @@ def _isolate_state(tmp_path, monkeypatch):
         last_flush_ns=0,
         last_flush_duration_seconds=0.0,
         quarantine_writes=0,
+        invalid_messages=0,
     )
     yield
 
@@ -209,3 +211,56 @@ def test_envelope_missing_fields_does_not_crash():
     assert row["seq"] == -1
     assert row["payload_json"] == "{}"
     assert row["_subject"] == "subj"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "raw",
+    [
+        b'{"source":"coinbase","timestamp":"not-an-integer","payload":{}}',
+        b"{not valid json",
+        b"\xff\xfe\x00",
+        b'["an","array"]',
+    ],
+)
+async def test_invalid_message_is_quarantined_before_ack(raw):
+    """Invalid input must be preserved exactly instead of crashing or disappearing."""
+    from plutarch import archiver
+
+    msg = FakeMsg("nephtys.stream.crypto.btc", {})
+    msg.data = raw
+
+    row = await archiver._row_or_quarantine(msg)
+
+    assert row is None
+    assert msg.ack_count == 1
+    assert archiver._state["invalid_messages"] == 1
+    assert archiver._state["quarantine_writes"] == 1
+
+    quarantine_files = list(Path(archiver.QUARANTINE_DIR).glob("plutarch_quarantine_*.ndjson"))
+    assert len(quarantine_files) == 1
+    record = json.loads(quarantine_files[0].read_text(encoding="utf-8"))
+    assert record["_quarantine_kind"] == "invalid_message"
+    assert record["_subject"] == msg.subject
+    assert base64.b64decode(record["raw_data_b64"]) == raw
+    assert record["_error_type"]
+
+
+@pytest.mark.asyncio
+async def test_invalid_message_remains_unacked_if_quarantine_fails(monkeypatch):
+    """A failed forensic write must leave the event eligible for redelivery."""
+    from plutarch import archiver
+
+    def fail_quarantine(*_args, **_kwargs):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(archiver, "_write_quarantine", fail_quarantine)
+    msg = FakeMsg("nephtys.stream.crypto.btc", {})
+    msg.data = b"{invalid"
+
+    row = await archiver._row_or_quarantine(msg)
+
+    assert row is None
+    assert msg.ack_count == 0
+    assert archiver._state["invalid_messages"] == 0
+    assert archiver._state["write_errors"] == 1

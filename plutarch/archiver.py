@@ -13,14 +13,17 @@ Durability contract (must hold for live post-mortems):
      fires first. No 10k-event in-memory queue.
   3. If `flush_buffer_to_lance` raises, the unflushed payloads are written to
      a quarantine NDJSON file (`PLUTARCH_QUARANTINE_DIR`) and the consumer
-     continues. NATS will redeliver the unacked messages.
+     continues from that durable record.
   4. Schema is fixed: {source, type, timestamp, seq, payload_json, _subject,
      _archived_at_ns}. Lance never sees a schema-drift batch.
+  5. Invalid messages are ACKed only after their exact raw bytes and validation
+     error have been durably written to quarantine.
 """
 
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import json
 import logging
@@ -77,6 +80,7 @@ _state: dict[str, Any] = {
     "last_flush_ns": 0,
     "last_flush_duration_seconds": 0.0,
     "quarantine_writes": 0,
+    "invalid_messages": 0,
     "started_at_ns": time.time_ns(),
 }
 
@@ -100,9 +104,9 @@ def _row_from_envelope(envelope: dict[str, Any], subject: str) -> dict[str, Any]
     }
 
 
-def _write_quarantine(rows: list[dict[str, Any]], error: BaseException) -> None:
-    """Persist rows we could not flush to Lance so they aren't lost on retry."""
-    if not rows:
+def _write_quarantine(records: list[dict[str, Any]], error: BaseException) -> None:
+    """Persist archive rows or invalid-message records after processing fails."""
+    if not records:
         return
     Path(QUARANTINE_DIR).mkdir(parents=True, exist_ok=True)
     fname = (
@@ -110,15 +114,69 @@ def _write_quarantine(rows: list[dict[str, Any]], error: BaseException) -> None:
         / f"plutarch_quarantine_{datetime.now(UTC).strftime('%Y%m%dT%H%M%S_%f')}.ndjson"
     )
     with fname.open("w", encoding="utf-8") as fh:
-        for row in rows:
-            fh.write(json.dumps(row) + "\n")
+        for record in records:
+            fh.write(json.dumps(record) + "\n")
     _state["quarantine_writes"] += 1
     logger.error(
-        "Wrote %d rows to quarantine file %s after flush failure: %s",
-        len(rows),
+        "Wrote %d records to quarantine file %s after processing failure: %s",
+        len(records),
         fname,
         error,
     )
+
+
+async def _quarantine_invalid_message(msg: Any, error: BaseException) -> bool:
+    """Quarantine one invalid message before acknowledging it.
+
+    The raw payload is base64 encoded so even non-UTF-8 input can be reconstructed
+    exactly. If the quarantine write fails, the message remains unacknowledged and
+    JetStream may redeliver it.
+    """
+    record = {
+        "_quarantine_kind": "invalid_message",
+        "_subject": str(msg.subject),
+        "_quarantined_at_ns": time.time_ns(),
+        "_error_type": type(error).__name__,
+        "_error": str(error),
+        "raw_data_b64": base64.b64encode(bytes(msg.data)).decode("ascii"),
+    }
+    try:
+        _write_quarantine([record], error)
+    except Exception:
+        _state["write_errors"] += 1
+        logger.exception(
+            "Plutarch: could not quarantine invalid message on subject %s; leaving unacked",
+            msg.subject,
+        )
+        return False
+
+    _state["invalid_messages"] += 1
+    try:
+        await msg.ack()
+    except Exception:
+        logger.exception(
+            "Plutarch: invalid message was quarantined but its ack failed on subject %s",
+            msg.subject,
+        )
+        return False
+    return True
+
+
+async def _row_or_quarantine(msg: Any) -> dict[str, Any] | None:
+    """Decode and project one message, quarantining any invalid input."""
+    try:
+        envelope = json.loads(msg.data.decode("utf-8"))
+        if not isinstance(envelope, dict):
+            raise ValueError("event envelope must be a JSON object")
+        return _row_from_envelope(envelope, str(msg.subject))
+    except Exception as exc:
+        logger.warning(
+            "Plutarch: invalid event on subject %s: %s",
+            msg.subject,
+            exc,
+        )
+        await _quarantine_invalid_message(msg, exc)
+        return None
 
 
 def flush_buffer_to_lance(rows: list[dict[str, Any]]) -> None:
@@ -210,18 +268,11 @@ async def run_archiver() -> None:
                 msgs = []
 
             for msg in msgs:
-                try:
-                    envelope = json.loads(msg.data.decode())
-                except Exception:
-                    logger.exception(
-                        "Plutarch: bad JSON on subject %s, acking & dropping",
-                        msg.subject,
-                    )
-                    with contextlib.suppress(Exception):
-                        await msg.ack()
+                row = await _row_or_quarantine(msg)
+                if row is None:
                     continue
 
-                pending_rows.append(_row_from_envelope(envelope, msg.subject))
+                pending_rows.append(row)
                 pending_msgs.append(msg)
                 _state["buffer_depth"] = len(pending_rows)
 
@@ -264,6 +315,7 @@ def _healthz_body() -> bytes:
         "events_written": _state["events_written"],
         "write_errors": _state["write_errors"],
         "quarantine_writes": _state["quarantine_writes"],
+        "invalid_messages": _state["invalid_messages"],
         "buffer_depth": _state["buffer_depth"],
         "last_flush_age_seconds": last_flush_age_seconds,
         "uptime_seconds": (now_ns - _state["started_at_ns"]) / 1e9,
@@ -276,6 +328,7 @@ def _metrics_body() -> bytes:
         f"plutarch_events_written_total {_state['events_written']}",
         f"plutarch_write_errors_total {_state['write_errors']}",
         f"plutarch_quarantine_writes_total {_state['quarantine_writes']}",
+        f"plutarch_invalid_messages_total {_state['invalid_messages']}",
         f"plutarch_buffer_depth {_state['buffer_depth']}",
         f"plutarch_last_flush_duration_seconds {_state['last_flush_duration_seconds']}",
     ]
