@@ -6,9 +6,9 @@ safe for live funds.
 
 ## Before contributing code
 
-Mercury does not yet have an owner-selected open-source licence. Until a `LICENSE` file is
-present, please use GitHub issues for proposals and bug reports; maintainers should not merge
-third-party code. This avoids accepting work under unclear terms.
+Mercury is licensed under the Apache License 2.0. Unless you explicitly state otherwise, any
+contribution intentionally submitted for inclusion in Mercury is provided under the same terms,
+as described in section 5 of the licence.
 
 Security and conduct reports do not belong in public issues. Follow [SECURITY.md](SECURITY.md).
 

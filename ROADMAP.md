@@ -25,13 +25,15 @@ TradeSignal -> Executor observe mode -> recorded decision, no exchange client or
 - [x] The locked runtime dependency set has no known advisories in `pip-audit`.
 - [x] Lint, format, tests, type checks, build, and dependency audit run in CI.
 - [x] Project status and known limitations are stated without performance claims.
-- [ ] Add a licence chosen by the owner.
-- [ ] Add contribution, security, conduct, and support policies.
-- [ ] Pin container images, run services as non-root, and add health checks.
+- [x] License the project under Apache-2.0.
+- [x] Add contribution, security, conduct, and support policies.
+- [x] Pin container images, run services as non-root, and add health checks.
 - [ ] Exercise the documented quickstart against a clean environment.
-- [ ] Add a small deterministic end-to-end observation smoke test.
+- [x] Add a small deterministic observation smoke test on real JetStream.
 - [ ] Define a stable event-envelope compatibility/version policy with Nephtys.
 - [x] Quarantine malformed events in Plutarch without crashing or acknowledging before evidence.
+- [x] Install and exercise the actual Apache Lance package rather than an unrelated namesake.
+- [x] Disable callback auto-ACK wherever Mercury explicitly ACKs, NAKs, or terminates messages.
 
 No alpha acceptance item requires sandbox or live trading.
 
@@ -42,22 +44,23 @@ The beta should support repeatable data research. It is not a live-trading miles
 ### Data integrity
 
 - Detect and surface feed stalls, sequence gaps, reconnects, stale observations, and archive lag.
-- Give Plutarch an explicit poison-message policy, bounded redelivery, quarantine alerts, and
-  retention/compaction operations.
+- Add quarantine alerts and retention/compaction operations; poison handling, bounded consumer
+  delivery, and redelivery metrics are already in place.
 - Verify that archived data can be replayed deterministically into strategy state.
-- Record provenance: venue, product, feed/channel, receive time, source time, sequence semantics,
-  schema version, and software version.
+- Extend current source/type/subject/source-time/broker-sequence provenance with explicit product,
+  receive-time semantics, schema version, and software revision.
 - Measure completeness over a fixed observation window and publish the report.
 
 ### Strategy isolation and evaluation
 
-- Keep strategy state per symbol and per venue; never share a rolling window across instruments.
-- Replace placeholder quantities in backtests with a capital-aware fill model.
-- Model fees, spread, slippage, latency, rejected fills, and base/quote balances.
-- Reset engine state between runs and make repeated runs deterministic.
+- Keep strategy state per symbol and per venue; the direct strategies are isolated, while all new
+  strategies must preserve that invariant.
+- Extend the current capital-aware, fee-and-adverse-slippage fill model with spread, latency,
+  liquidity, partial fills, rejects, and explicit base/quote balances.
+- Preserve fresh engine state and deterministic repeated runs.
 - Use train/validation/test time splits and walk-forward evaluation.
-- Report drawdown, turnover, exposure, trade count, fee sensitivity, and data coverage alongside
-  Sharpe-like metrics.
+- Extend the current drawdown, turnover, exposure-rate, trade-count, cost, duplicate, invalid-event,
+  and data-coverage report with sensitivity and confidence intervals.
 - Treat the current moving-average and order-book strategies as examples until out-of-sample
   evidence says otherwise.
 
@@ -66,7 +69,8 @@ The beta should support repeatable data research. It is not a live-trading miles
 - Publish an architecture decision record for the direct Brain path versus experimental Bytewax.
 - Add runbooks for NATS loss, feed loss, archive failure, HALT, recovery, and credential rotation.
 - Expose and document health/metrics for every service in the supported deployment path.
-- Add integration tests for NATS redelivery, restart recovery, and archive replay.
+- Extend the current real-NATS observation/redelivery/archive test with process restart recovery
+  and a real Nephtys connector.
 - Publish release notes and compatibility requirements for Mercury and Nephtys.
 
 ## Future stage: execution research
@@ -85,7 +89,8 @@ availability.
 - [ ] Make risk reservations and exposure updates atomic under concurrent signals.
 - [x] Reconcile paginated fills without stopping when an early quantity matches the current balance.
 - [x] Persist boundary trade identities so multiple fills can share one exchange timestamp.
-- [ ] Reject stale market price, balance, volatility, risk-limit, and exchange metadata inputs.
+- [x] Reject stale balance, volatility-modulator, and dynamic risk-limit inputs.
+- [ ] Add timestamped freshness for market prices and exchange metadata.
 - [ ] Run failure drills for rejected orders, timeouts, partial fills, NATS loss, and restarts.
 
 ## Live execution: out of release scope

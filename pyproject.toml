@@ -1,8 +1,9 @@
 [project]
 name = "mercury"
 version = "0.2.0"
-description = "Autonomous Trading Agent"
+description = "Observation-first crypto market research system"
 readme = "README.md"
+license = "Apache-2.0"
 requires-python = ">=3.11"
 dependencies = [
     "ccxt>=4.5.42",
@@ -22,6 +23,10 @@ dependencies = [
     "pyarrow>=19.0.0",
     "polars>=1.0.0",
 ]
+
+[project.urls]
+Repository = "https://github.com/AndreaBozzo/Mercury"
+Issues = "https://github.com/AndreaBozzo/Mercury/issues"
 
 [build-system]
 requires = ["setuptools>=83.0.0"]

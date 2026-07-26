@@ -5,6 +5,8 @@ build/
 dist/
 wheels/
 *.egg-info
+.coverage
+.audit-requirements.txt
 
 # Virtual environments
 .venv

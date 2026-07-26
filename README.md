@@ -26,7 +26,7 @@ execution experiments.
 | `live` | No | No | Recognized only to fail at startup; outside the supported release |
 
 Live execution is deliberately disabled because open blockers include execution idempotency,
-atomic risk accounting, correct sell-side sizing, and operational kill-switch drills. See
+atomic risk accounting, ambiguous order-state reconciliation, and operational kill-switch drills. See
 [ROADMAP.md](ROADMAP.md) and [docs/ASSESSMENT.md](docs/ASSESSMENT.md).
 
 ## EU and Italy venue context
@@ -62,7 +62,8 @@ Nephtys ──► NATS JetStream ──► Brain ──► trade.signals ──�
   outcome without constructing a CCXT exchange. Sandbox mode requires explicit configuration;
   live mode is rejected.
 - **Plutarch** archives raw event envelopes to Lance with ack-after-write behavior and an NDJSON
-  quarantine fallback.
+  quarantine fallback. Archive schema v2 stores the JetStream stream sequence so replay can
+  identify write-success/ack-failure duplicates.
 - **Backtesting** replays Lance rows through the same strategy interface used by the Brain. Its
   cash-backed, long-only MARKET fill model applies configurable fees and adverse slippage. It
   remains intentionally basic and is not suitable for validating an edge.
@@ -101,6 +102,10 @@ Requirements:
    docker compose up -d nats
    ```
 
+   The Compose file uses pinned images, unprivileged users, read-only filesystems, health-based
+   startup, and loopback-only host ports. Its NATS broker has no authentication or TLS: it is a
+   local development profile and must not be exposed to another host.
+
 4. Start Nephtys against `nats://localhost:4222`, then register Mercury's default public feed:
 
    ```bash
@@ -123,6 +128,10 @@ Requirements:
 
 The first moving-average signal appears only after its rolling window is populated. In observation
 mode that signal is risk-checked and marked `observed`; it is never sent to an exchange.
+
+Plutarch writes new archives to `data/history/market_history_v2.lance`. The backtester can still
+read legacy v1 rows, but only v2 rows retain the broker identity needed for exact redelivery
+deduplication.
 
 ## Market-data profiles
 
@@ -174,6 +183,7 @@ CI enforces:
 - the full pytest suite
 - source and wheel builds
 - a vulnerability audit of locked runtime dependencies
+- a real NATS JetStream smoke test covering observation, archival, and NAK redelivery
 
 Useful individual commands:
 
@@ -181,7 +191,7 @@ Useful individual commands:
 uv run pytest
 uv run ruff check .
 uv run ruff format --check .
-uv run mypy core brain executor plutarch backtesting
+uv run mypy .
 uv run pip-audit
 uv build
 ```
@@ -197,9 +207,16 @@ uv build
   fully account for external asset transfers or every venue-specific fee representation.
 - The optional Bytewax path acknowledges input before checkpointed processing and does not await
   signal publication; it is experimental.
-- Public-release governance files and a project licence still require an owner decision.
+- The local Compose profile is not a secured remote deployment, and its images still need one
+  clean-daemon build/run verification before the first release; follow the
+  [public alpha release checklist](docs/RELEASE_CHECKLIST.md).
+- GitHub private vulnerability reporting must be enabled in repository settings before
+  publication.
 
 ## Licence
 
-No open-source licence has been selected yet. Until the owner chooses and adds one, normal
-copyright restrictions apply. Licence selection is a blocker for a deliberate public release.
+Mercury is licensed under the [Apache License 2.0](LICENSE). Contributions are accepted under the
+same terms; see [CONTRIBUTING.md](CONTRIBUTING.md).
+
+Public reporting and conduct expectations are documented in [SECURITY.md](SECURITY.md),
+[SUPPORT.md](SUPPORT.md), and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
