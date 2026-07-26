@@ -27,8 +27,8 @@ git status --short
 ```
 
 - [x] The portable source gate passes from the clean clone.
-- [x] The unit/component suite reports 251 passes when no external broker is configured.
-- [ ] CI reports 253 passes when its real-NATS integration environment is enabled.
+- [x] The unit/component suite reports 257 passes when no external broker is configured.
+- [ ] CI reports 259 passes when its real-NATS integration environment is enabled.
 - [x] The source tree is clean after checks, except ignored build/test artifacts.
 - [x] The built source and wheel metadata both identify Apache-2.0.
 
@@ -73,20 +73,20 @@ the local host.
 
 ## Mercury and Nephtys interoperability
 
-- [ ] Use an exact, clean Nephtys revision and the documented Coinbase BTC/EUR public profile.
+- [x] Use an exact, clean Nephtys revision and the documented Coinbase BTC/EUR public profile.
 - [x] Confirm a synthetic, contract-compatible Coinbase ticker reaches Brain and Plutarch.
 - [x] Confirm Executor records `observed` and never constructs an exchange client.
 - [x] Confirm archive rows contain source, subject, source timestamp, payload, and JetStream stream
   sequence.
 - [x] Restart NATS, Brain, Executor, and Plutarch one at a time; record observed loss, redelivery,
   duplication, health transitions, and recovery behavior.
-- [ ] Restart a real Nephtys process and confirm its configured connector is restored correctly.
-- [ ] Record the known Nephtys pipeline-persistence limitation in release notes.
+- [x] Restart a real Nephtys process and confirm its configured connector is restored correctly.
+- [x] Record the known Nephtys pipeline-persistence limitation in release notes.
 
 ## Release record
 
-- [ ] Summarize known alpha limitations from `README.md` and `docs/ASSESSMENT.md`.
-- [ ] State explicitly that live execution is disabled and sandbox execution is experimental.
-- [ ] Link the dated ESMA MiCA register rather than claiming permanent venue eligibility.
+- [x] Summarize known alpha limitations from `README.md` and `docs/ASSESSMENT.md`.
+- [x] State explicitly that live execution is disabled and sandbox execution is experimental.
+- [x] Link the dated ESMA MiCA register rather than claiming permanent venue eligibility.
 - [ ] Tag the verified commit, attach the source/wheel artifacts produced by CI, and record their
   checksums.

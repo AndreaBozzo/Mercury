@@ -10,8 +10,9 @@ Mercury now has a tested event-driven observation path, typed domain models, a r
 observable services, fail-closed execution boundaries, and a materially stronger engineering
 baseline than the repository had at the start of this review. The code is a credible
 **observation alpha**. Making the repository public still requires enabling private vulnerability
-reporting. Before the first alpha tag, run the documented profile with an exact real Nephtys
-revision and record that compatibility result.
+reporting and completing the remaining repository-setting and tagged-CI actions. The documented
+Coinbase profile has now passed with an exact real Nephtys revision, including connector restore
+after a process restart.
 
 It is not a live-trading system. The most important reason is not venue selection: a successfully
 submitted order can be followed by a process, NATS, or KV failure, after which JetStream may
@@ -48,7 +49,7 @@ regressions, not proof of trading safety.
 
 | Check | Result on 2026-07-26 |
 |---|---|
-| Unit/component tests | 251 passed; 2 external-service tests skipped without a broker |
+| Unit/component tests | 257 passed; 2 external-service tests skipped without a broker |
 | Real JetStream integration | 2 passed against pinned NATS 2.14.3 |
 | Runtime-only branch-aware coverage | 71% overall |
 | Lowest runtime-module coverage | Bytewax 32%, provisioning 35%, Ray runner 36%, Brain entrypoint 52% |
@@ -56,14 +57,17 @@ regressions, not proof of trading safety.
 | Mypy, including unannotated runtime bodies | Passed |
 | Source and wheel build | Passed |
 | Locked runtime dependency audit | No known advisories reported |
-| Compose build/runtime | Uncached build passed; all services ran as UID 10001 with read-only roots, dropped capabilities, health checks, and loopback ports |
+| Compose build/runtime | Final uncached build passed; all services ran as UID 10001 with read-only roots, dropped capabilities, health checks, and loopback ports; the corrected stream contract archived 21/21 fresh-broker events across application restarts |
 | Container observation/recovery drill | 60 synthetic events archived with 60 unique stream identities; one-at-a-time service restarts and a NATS outage recovered without post-recovery errors |
+| Real Nephtys/Coinbase drill | Nephtys `485ecbb7beb7` restored its persisted BTC/EUR connector after restart; 72 real Coinbase rows archived with no duplicate stream identities or Plutarch errors |
 
 Coverage excludes tests from the numerator/denominator and is not an acceptance threshold. The
 experimental Bytewax path and operational entrypoints remain the weakest areas. The real-broker
 test covers a representative Nephtys envelope through Brain, Executor observation, and Plutarch;
-the manual container drill also proves service/NATS restart recovery. Neither starts a real
-Nephtys process.
+the manual container drill proves service/NATS restart recovery. A separate isolated drill started
+the exact Nephtys binary, received real Coinbase observations, proved Brain acknowledgement and
+Plutarch provenance, and restored the connector without reprovisioning after restart. The evidence
+and compatibility boundary are recorded in [ALPHA_RELEASE_NOTES.md](ALPHA_RELEASE_NOTES.md).
 
 ## Regulatory and venue boundary
 
@@ -178,10 +182,11 @@ during this review.
 | BR-02 | High | Poison messages had no complete delivery policy. | Unparseable or repeatedly failing events could redeliver forever or block useful work. | **Partially resolved:** malformed messages terminate; transient failures NAK with delay and a delivery cap. A durable dead-letter stream and alert remain. |
 | BR-03 | High | Experimental Bytewax input acknowledges before checkpointed processing. | A crash after the in-memory handoff can lose an event despite recovery claims. | Keep unsupported, or make source offsets/ack lifecycle checkpoint-aware. |
 | BR-04 | High | Experimental Bytewax output does not await publication results. | Failed signal publishes can be silently lost. | Await/collect publish acknowledgements and propagate failure. |
-| BR-05 | Medium | Coinbase ticker sequence is not promoted by Nephtys metadata inference. | Mercury can still consume price/product/time, but generic envelope `seq`/`type` semantics are weaker than Binance's. | Define a versioned generic metadata mapping or normalize in a documented adapter. |
+| BR-05 | Medium | Coinbase ticker sequence is not promoted by Nephtys metadata inference. | Mercury can still consume price/product/time, but generic envelope `seq`/`type` semantics are weaker than Binance's. | **Partially resolved:** [NME/1](NEPHTYS_COMPATIBILITY.md) fixes and tests the current semantics; an explicit on-wire version and richer Coinbase inference remain beta work. |
 | BR-06 | Medium | Binance snapshot task failure could remain cached. | Re-reading a failed completed task could repeatedly raise instead of scheduling recovery. | **Resolved during review:** failed tasks are cleared before propagation and the next delivery starts a fresh snapshot. |
 | BR-07 | Medium | Broad JetStream setup exception handling could hide incompatible stream configuration or permissions. | A service could continue with an unusable or misconfigured stream. | **Resolved during review:** only not-found creates; effective subjects are validated in supported and experimental paths. |
 | BR-08 | High | Async consumers explicitly ACKed/NAKed while callback auto-ack remained enabled. | A transient failure could be NAKed by Mercury and then auto-ACKed by the client callback wrapper, defeating redelivery. | **Resolved during review:** all explicit-ack async subscriptions set `manual_ack=True`; a real JetStream test proves NAK redelivery. |
+| BR-09 | High | Mercury created `nephtys_crypto` while Nephtys owns overlapping `nephtys.stream.>`. | NATS rejected either startup order with `subjects overlap with an existing stream`, so the documented real integration could not run. | **Resolved during review:** Mercury reuses the configurable Nephtys-owned `NEPHTYS` stream and keeps narrow subjects at the consumer-filter boundary. |
 
 The direct Brain path should remain the supported alpha path. Bytewax should be labeled
 experimental until its acknowledgement and publication semantics match the durability claims.
@@ -198,6 +203,7 @@ experimental until its acknowledgement and publication semantics match the durab
 | PL-06 | Medium | Quarantine writes have no external alert. | The service can remain nominally running while all new data is diverted. | Alert on first occurrence and sustained rate; document recovery. |
 | PL-07 | High | The dependency named `lance` was an unrelated PyPI package. | Real `lance.write_dataset` did not exist, so every production flush was quarantined; mocks hid the failure. | **Resolved during review:** depend on Apache Lance's `pylance`, lock it, and perform real writes in CI. |
 | PL-08 | High | At-least-once archive duplicates had no reliable replay identity. | A write-success/ACK-failure redelivery could be counted twice in research results. | **Resolved for schema v2:** archive the JetStream stream sequence and deduplicate it in replay; legacy rows remain inherently unidentified. |
+| PL-09 | High | Existing durable-consumer settings were silently ignored by nats-py subscription helpers. | A persisted two-second ACK wait survived a requested 30-second setting and caused avoidable redelivery duplicates. Changed Brain/Executor filters could likewise bind stale consumers. | **Resolved during review:** correctness-relevant persisted settings are validated before binding; incompatible durables fail closed with a migration error. |
 
 ### Backtesting and research validity
 
@@ -223,7 +229,7 @@ an edge.
 | OP-05 | High | NATS has no authentication/TLS in the sample deployment. | Exposing the sample beyond loopback would expose events, risk state, and control subjects. | **Contained for alpha:** every host port binds loopback and documentation says local-only. A secured remote profile remains future work. |
 | OP-06 | Medium | NATS connection ownership/cleanup was unclear. | Services received JetStream contexts without consistently closing their client. | **Resolved during review:** supported services and the Bytewax bridge own and drain sessions. |
 | OP-07 | Medium | Mypy checked only typed function bodies. | Untyped legacy paths could escape analysis while CI appeared fully type-checked. | **Resolved during review:** `check_untyped_defs` is enabled for all runtime packages and provisioning. |
-| OP-08 | Medium | No automated end-to-end observation test existed. | Unit tests could not prove NATS/Brain/Executor/Plutarch compatibility. | **Partially resolved:** CI runs a real-NATS representative-envelope smoke and redelivery test; manual service/NATS restart recovery passed. A real Nephtys process and automated restart drill remain. |
+| OP-08 | Medium | No automated end-to-end observation test existed. | Unit tests could not prove NATS/Brain/Executor/Plutarch compatibility. | **Mostly resolved:** CI runs isolated, repeatable real-NATS smoke and redelivery tests; manual service/NATS and real-Nephtys restart recovery passed. Automating the real connector/restart drill remains. |
 | OP-09 | Medium | Nephtys pipeline updates are not currently persisted. | Restart can restore a stale connector configuration; the old roadmap incorrectly said this was fixed. | Track as a generic Nephtys compatibility issue; do not claim persistence. |
 | OP-10 | Medium | Hardened Compose images had not been built in the review environment. | Static render and Dockerfile review could not catch every build/runtime ownership problem. | **Resolved during review:** an uncached pull/build, full-profile run, hardening inspection, 60-event archive drill, one-at-a-time restart, NATS outage/recovery, and clean shutdown passed. |
 
@@ -263,12 +269,13 @@ The beta acceptance report should include:
 
 ## Recommended sequence
 
-1. Enable GitHub private vulnerability reporting and complete the remaining real-Nephtys and
-   repository-setting items in the [public alpha release checklist](RELEASE_CHECKLIST.md).
-2. Define and test a versioned Nephtys event-envelope contract, including restart persistence.
+1. Enable GitHub private vulnerability reporting and complete the remaining repository-setting,
+   tagged-CI, and artifact items in the [public alpha release checklist](RELEASE_CHECKLIST.md).
+2. Add an explicit on-wire version to the documented NME contract and persist Nephtys pipeline
+   updates.
 3. Add archive quarantine alerts, broker-lag metrics, compaction, retention, and provenance.
 4. Add chronological splits, walk-forward evaluation, cost sensitivity, and confidence intervals.
-5. Exercise Nephtys/NATS/service restart and redelivery recovery end to end.
+5. Automate the manually verified Nephtys/NATS/service restart and redelivery recovery drill.
 6. Only then repair atomic sandbox execution reservations and ambiguous order reconciliation.
 7. Conduct a separate live-readiness review only if live execution remains a project goal.
 

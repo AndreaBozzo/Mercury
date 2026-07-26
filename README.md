@@ -15,7 +15,8 @@ typed strategy signals, archiving events, and experimenting with execution contr
 Mercury is the sister project to [Nephtys](https://github.com/AndreaBozzo/Nephtys), the generic
 real-time connector layer. Nephtys connects to upstream feeds and publishes durable events to
 NATS JetStream; Mercury owns the trading-domain schemas, strategies, risk controls, archive, and
-execution experiments.
+execution experiments. Their supported wire and restart boundary is defined in the
+[NME/1 compatibility contract](docs/NEPHTYS_COMPATIBILITY.md).
 
 ## Current safety boundary
 
@@ -106,6 +107,9 @@ Requirements:
    startup, and loopback-only host ports. Its NATS broker has no authentication or TLS: it is a
    local development profile and must not be exposed to another host.
 
+   Existing pre-candidate installations should read the stream-migration note under
+   [Market-data profiles](#market-data-profiles) before starting Nephtys.
+
 4. Start Nephtys against `nats://localhost:4222`, then register Mercury's default public feed:
 
    ```bash
@@ -148,6 +152,13 @@ Set `MERCURY_MARKET_DATA_PROFILE` before running the provisioning script.
 Provisioning is idempotent by stream ID. A `409` means the existing Nephtys stream is retained;
 it does not prove that its configuration matches the current profile. Remove or rename stale
 streams deliberately when migrating profiles.
+
+Nephtys owns the broad `NEPHTYS` stream on `nephtys.stream.>`; Mercury's consumers apply narrower
+filters within it. Pre-candidate Mercury deployments may contain the old, overlapping
+`nephtys_crypto` stream. Preserve any needed data and migrate that stream deliberately before
+starting current Nephtys—NATS rejects overlapping stream subjects, and Mercury never deletes
+broker data automatically. Persisted durable-consumer settings are also validated at startup;
+change a durable name or perform an explicit migration when changing its filter or ACK policy.
 
 ## Execution configuration
 
@@ -213,8 +224,9 @@ uv build
   signal publication; it is experimental.
 - The local Compose profile has been exercised as a hardened local development deployment, but it
   is not secured for remote use.
-- The complete quickstart still needs one clean run with a real, exact Nephtys revision; follow
-  the [public alpha release checklist](docs/RELEASE_CHECKLIST.md).
+- The exact real-Nephtys/Coinbase quickstart and connector restart passed on 2026-07-26; see the
+  [alpha release record](docs/ALPHA_RELEASE_NOTES.md). Nephtys connector registration persists,
+  but runtime pipeline updates remain transient across restart.
 - GitHub private vulnerability reporting must be enabled in repository settings before
   publication.
 
