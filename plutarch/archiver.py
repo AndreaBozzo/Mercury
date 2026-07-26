@@ -35,12 +35,11 @@ from pathlib import Path
 from typing import Any
 
 import lance
+import nats
 import pyarrow as pa
 from dotenv import load_dotenv
 from nats.js.api import ConsumerConfig
 from nats.js.errors import NotFoundError
-
-import nats
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)

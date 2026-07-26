@@ -8,8 +8,8 @@ from collections.abc import Iterable, Sequence
 
 CHECK_COMMANDS: tuple[tuple[str, ...], ...] = (
     ("uv", "lock", "--check"),
-    ("uv", "run", "ruff", "check", "."),
-    ("uv", "run", "ruff", "format", "--check", "."),
+    ("uv", "run", "ruff", "check", "--no-cache", "."),
+    ("uv", "run", "ruff", "format", "--check", "--no-cache", "."),
     ("uv", "run", "mypy", "."),
     ("uv", "run", "pytest"),
     (

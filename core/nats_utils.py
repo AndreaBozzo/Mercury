@@ -12,12 +12,11 @@ import json
 import os
 from dataclasses import dataclass
 
+import nats
 from dotenv import load_dotenv
 from nats.aio.client import Client as NatsClient
 from nats.js import JetStreamContext
 from nats.js.errors import NotFoundError
-
-import nats
 
 load_dotenv()
 

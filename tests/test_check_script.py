@@ -12,8 +12,8 @@ def test_check_commands_cover_the_release_gate() -> None:
     rendered = {" ".join(command) for command in CHECK_COMMANDS}
 
     assert "uv lock --check" in rendered
-    assert "uv run ruff check ." in rendered
-    assert "uv run ruff format --check ." in rendered
+    assert "uv run ruff check --no-cache ." in rendered
+    assert "uv run ruff format --check --no-cache ." in rendered
     assert "uv run mypy ." in rendered
     assert "uv run pytest" in rendered
     assert any(command.startswith("uv export --frozen --no-dev") for command in rendered)
