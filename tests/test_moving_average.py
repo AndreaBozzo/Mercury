@@ -11,9 +11,9 @@ from brain.strategies.moving_average import MovingAverageStrategy
 from core.schemas import MarketEvent, TradeSignal
 
 
-def _ev(price: float, symbol: str = "BTC/USDT") -> MarketEvent:
+def _ev(price: float, symbol: str = "BTC/USDT", source: str = "test") -> MarketEvent:
     return MarketEvent(
-        source="test",
+        source=source,
         type="trade",
         timestamp=int(datetime.now().timestamp() * 1000),
         payload={"symbol": symbol, "price": price},
@@ -70,6 +70,15 @@ class TestMovingAverageStrategy:
         s = MovingAverageStrategy(window=5)
         assert s.evaluate(_ev(-1.0)) is None
 
+    def test_invalid_and_non_finite_prices_do_not_poison_history(self):
+        s = MovingAverageStrategy(window=3)
+        assert s.evaluate(_ev(float("nan"))) is None
+        invalid = _ev(100.0).model_copy(update={"payload": {"symbol": "BTC/USDT", "price": "bad"}})
+        assert s.evaluate(invalid) is None
+        assert s.evaluate(_ev(100.0)) is None
+        assert s.evaluate(_ev(100.0)) is None
+        assert s.evaluate(_ev(100.0)) is None
+
     def test_confidence_scales_with_deviation(self):
         s = MovingAverageStrategy(window=5)
         _fill(s, 100.0, 5)
@@ -108,6 +117,26 @@ class TestMovingAverageStrategy:
 
         assert sig1 is not None and sig1.action == "BUY"
         assert sig2 is not None and sig2.action == "BUY"
+
+    def test_state_isolation_between_instruments(self):
+        """One strategy instance must warm each venue/product independently."""
+        strategy = MovingAverageStrategy(window=3)
+
+        assert strategy.evaluate(_ev(100.0, symbol="BTC/USDT")) is None
+        assert strategy.evaluate(_ev(100.0, symbol="BTC/USDT")) is None
+        assert strategy.evaluate(_ev(200.0, symbol="ETH/EUR")) is None
+        assert strategy.evaluate(_ev(200.0, symbol="ETH/EUR")) is None
+        assert strategy.evaluate(_ev(200.0, symbol="ETH/EUR")) is None
+
+    def test_state_isolation_between_sources(self):
+        """The same product on two venues must not share price history."""
+        strategy = MovingAverageStrategy(window=3)
+
+        assert strategy.evaluate(_ev(100.0, symbol="BTC/EUR", source="coinbase")) is None
+        assert strategy.evaluate(_ev(100.0, symbol="BTC/EUR", source="coinbase")) is None
+        assert strategy.evaluate(_ev(200.0, symbol="BTC/EUR", source="kraken")) is None
+        assert strategy.evaluate(_ev(200.0, symbol="BTC/EUR", source="kraken")) is None
+        assert strategy.evaluate(_ev(200.0, symbol="BTC/EUR", source="kraken")) is None
 
     def test_custom_thresholds(self):
         # Tighter band

@@ -9,7 +9,8 @@ Why class-based:
     - Two backtest runs in the same process share state → wrong results
     - Ray workers each import the module in a fresh subprocess, but within
       one worker different parameter combinations would stomp each other
-  A class instance per (strategy, params, worker) eliminates both problems.
+  A class instance per (strategy, params, worker), with history keyed by event
+  source and symbol, eliminates both problems.
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 import statistics
 from collections import deque
 from datetime import UTC, datetime
+from math import isfinite
 from typing import Literal
 
 from core.schemas import INTENT_PLACEHOLDER_QTY, MarketEvent, TradeSignal
@@ -47,7 +49,7 @@ class MovingAverageStrategy:
         self.window = window
         self.buy_threshold = buy_threshold
         self.sell_threshold = sell_threshold
-        self._prices: deque[float] = deque(maxlen=window)
+        self._prices: dict[tuple[str, str], deque[float]] = {}
 
     def evaluate(self, event: MarketEvent) -> TradeSignal | None:
         payload = event.payload
@@ -55,16 +57,21 @@ class MovingAverageStrategy:
             symbol = normalize_symbol(payload.get("symbol"))
         except ValueError:
             return None
-        price = float(payload.get("price", 0.0))
-
-        if price <= 0:
+        try:
+            price = float(payload.get("price", 0.0))
+        except (TypeError, ValueError):
             return None
 
-        self._prices.append(price)
-        if len(self._prices) < self.window:
+        if not isfinite(price) or price <= 0:
             return None
 
-        ma = statistics.mean(self._prices)
+        state_key = (event.source.strip().casefold(), symbol)
+        prices = self._prices.setdefault(state_key, deque(maxlen=self.window))
+        prices.append(price)
+        if len(prices) < self.window:
+            return None
+
+        ma = statistics.mean(prices)
 
         action: Literal["BUY", "SELL"]
         if price < ma * self.buy_threshold:

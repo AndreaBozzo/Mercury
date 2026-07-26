@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import deque
 from datetime import UTC, datetime
+from math import isfinite
 from typing import Literal
 
 from core.schemas import INTENT_PLACEHOLDER_QTY, MarketEvent, TradeSignal
@@ -24,8 +25,8 @@ class OrderBookVwapImbalanceStrategy:
         self.imbalance_threshold = imbalance_threshold
         self.max_spread_bps = max_spread_bps
         self.imbalance_slope_threshold = imbalance_slope_threshold
-        self._price_volume: deque[tuple[float, float]] = deque(maxlen=vwap_window)
-        self._imbalances: deque[float] = deque(maxlen=imbalance_window)
+        self._price_volume: dict[tuple[str, str], deque[tuple[float, float]]] = {}
+        self._imbalances: dict[tuple[str, str], deque[float]] = {}
 
     def evaluate(self, event: MarketEvent) -> TradeSignal | None:
         payload = event.payload
@@ -42,8 +43,13 @@ class OrderBookVwapImbalanceStrategy:
         if volume <= 0:
             volume = 1.0
 
-        self._price_volume.append((price, volume))
-        vwap = self._current_vwap()
+        state_key = (event.source.strip().casefold(), symbol)
+        price_volume = self._price_volume.setdefault(
+            state_key,
+            deque(maxlen=self.vwap_window),
+        )
+        price_volume.append((price, volume))
+        vwap = self._current_vwap(price_volume)
         if vwap is None:
             return None
 
@@ -53,12 +59,16 @@ class OrderBookVwapImbalanceStrategy:
         if imbalance is None or spread is None or mid <= 0:
             return None
 
-        self._imbalances.append(imbalance)
-        if len(self._imbalances) < min(3, self.imbalance_window):
+        imbalances = self._imbalances.setdefault(
+            state_key,
+            deque(maxlen=self.imbalance_window),
+        )
+        imbalances.append(imbalance)
+        if len(imbalances) < min(3, self.imbalance_window):
             return None
 
-        mean_imbalance = sum(self._imbalances) / len(self._imbalances)
-        imbalance_slope = self._imbalances[-1] - self._imbalances[0]
+        mean_imbalance = sum(imbalances) / len(imbalances)
+        imbalance_slope = imbalances[-1] - imbalances[0]
         spread_bps = spread / mid * 10_000
         if spread_bps > self.max_spread_bps:
             return None
@@ -100,19 +110,21 @@ class OrderBookVwapImbalanceStrategy:
             timestamp=datetime.now(UTC),
         )
 
-    def _current_vwap(self) -> float | None:
-        if not self._price_volume:
+    @staticmethod
+    def _current_vwap(price_volume: deque[tuple[float, float]]) -> float | None:
+        if not price_volume:
             return None
-        total_volume = sum(volume for _, volume in self._price_volume)
+        total_volume = sum(volume for _, volume in price_volume)
         if total_volume <= 0:
             return None
-        return sum(price * volume for price, volume in self._price_volume) / total_volume
+        return sum(price * volume for price, volume in price_volume) / total_volume
 
 
 def _as_float(value) -> float | None:
     try:
         if value is None:
             return None
-        return float(value)
+        number = float(value)
     except (TypeError, ValueError):
         return None
+    return number if isfinite(number) else None

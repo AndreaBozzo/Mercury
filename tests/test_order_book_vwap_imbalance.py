@@ -89,6 +89,11 @@ class TestOrderBookVwapImbalanceStrategy:
         _warm(strategy)
         assert strategy.evaluate(_ev(98.0)) is None
 
+    def test_non_finite_values_do_not_poison_history(self):
+        strategy = OrderBookVwapImbalanceStrategy(vwap_window=3, imbalance_window=3)
+        assert strategy.evaluate(_ev(float("nan"), imbalance=0.5, spread=0.02, mid=100.0)) is None
+        assert strategy.evaluate(_ev(100.0, imbalance=float("inf"), spread=0.02, mid=100.0)) is None
+
     def test_normalizes_compact_symbol(self):
         strategy = OrderBookVwapImbalanceStrategy(vwap_window=5, imbalance_window=5)
         strategy.evaluate(_ev(100.0, imbalance=0.05, spread=0.02, mid=100.0, symbol="BTCUSDT"))
@@ -100,3 +105,35 @@ class TestOrderBookVwapImbalanceStrategy:
         )
         assert signal is not None
         assert signal.symbol == "BTC/USDT"
+
+    def test_state_isolation_between_instruments(self):
+        """BTC history must not warm or influence ETH calculations."""
+        strategy = OrderBookVwapImbalanceStrategy(
+            vwap_window=3,
+            imbalance_window=3,
+            deviation_threshold=0.01,
+            imbalance_threshold=0.2,
+            max_spread_bps=5.0,
+            imbalance_slope_threshold=0.05,
+        )
+
+        assert (
+            strategy.evaluate(_ev(100.0, symbol="BTC/USDT", imbalance=-0.3, spread=0.02, mid=100.0))
+            is None
+        )
+        assert (
+            strategy.evaluate(_ev(100.0, symbol="BTC/USDT", imbalance=-0.4, spread=0.02, mid=100.0))
+            is None
+        )
+        assert (
+            strategy.evaluate(_ev(200.0, symbol="ETH/EUR", imbalance=-0.5, spread=0.02, mid=200.0))
+            is None
+        )
+        assert (
+            strategy.evaluate(_ev(200.0, symbol="ETH/EUR", imbalance=-0.5, spread=0.02, mid=200.0))
+            is None
+        )
+        assert (
+            strategy.evaluate(_ev(200.0, symbol="ETH/EUR", imbalance=-0.5, spread=0.02, mid=200.0))
+            is None
+        )
