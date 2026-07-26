@@ -64,7 +64,8 @@ Nephtys ──► NATS JetStream ──► Brain ──► trade.signals ──�
 - **Plutarch** archives raw event envelopes to Lance with ack-after-write behavior and an NDJSON
   quarantine fallback.
 - **Backtesting** replays Lance rows through the same strategy interface used by the Brain. Its
-  current fill/P&L model is intentionally basic and is not suitable for validating an edge.
+  cash-backed, long-only MARKET fill model applies configurable fees and adverse slippage. It
+  remains intentionally basic and is not suitable for validating an edge.
 
 The services communicate through NATS rather than sharing API keys or process memory. Exchange
 credentials belong only in the Executor environment.
@@ -194,7 +195,8 @@ uv build
 ## Known limitations
 
 - Strategy output has no demonstrated positive expectancy.
-- Backtests omit realistic fees, spread, slippage, latency, and capital-aware fills.
+- Backtests use generic fee/slippage assumptions but still omit latency, order-book liquidity,
+  partial fills, venue rejects, and venue-specific rules.
 - A signal redelivered after a partially completed live order can still create an ambiguous or
   duplicate execution.
 - Sell sizing currently lacks authoritative free-base-asset accounting.

@@ -55,10 +55,24 @@ def _run_single(
     params: dict,
     dataset_path: str,
     initial_balance: float,
+    fee_bps: float,
+    slippage_bps: float,
+    max_position_fraction: float,
 ) -> dict:
     from backtesting.engine import BacktestEngine
 
-    return BacktestEngine(strategy_factory, params, initial_balance).run(dataset_path).to_dict()
+    return (
+        BacktestEngine(
+            strategy_factory,
+            params,
+            initial_balance,
+            fee_bps=fee_bps,
+            slippage_bps=slippage_bps,
+            max_position_fraction=max_position_fraction,
+        )
+        .run(dataset_path)
+        .to_dict()
+    )
 
 
 if _RAY_AVAILABLE:
@@ -69,8 +83,19 @@ if _RAY_AVAILABLE:
         params: dict,
         dataset_path: str,
         initial_balance: float,
+        fee_bps: float,
+        slippage_bps: float,
+        max_position_fraction: float,
     ) -> dict:
-        return _run_single(strategy_factory, params, dataset_path, initial_balance)
+        return _run_single(
+            strategy_factory,
+            params,
+            dataset_path,
+            initial_balance,
+            fee_bps,
+            slippage_bps,
+            max_position_fraction,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -84,6 +109,10 @@ def parameter_sweep(
     dataset_path: str,
     initial_balance: float = 10_000.0,
     max_concurrent: int = 100,
+    *,
+    fee_bps: float = 10.0,
+    slippage_bps: float = 5.0,
+    max_position_fraction: float = 0.10,
 ) -> list[dict]:
     """
     Full grid search over every combination in `param_grid`.
@@ -103,6 +132,8 @@ def parameter_sweep(
     max_concurrent
         Maximum number of Ray tasks in flight at once.  Keeps memory bounded
         when the grid has tens of thousands of combinations.
+    fee_bps, slippage_bps, max_position_fraction
+        Fill-model assumptions forwarded to each isolated BacktestEngine.
 
     Returns
     -------
@@ -132,11 +163,31 @@ def parameter_sweep(
         for i in range(0, len(combos), max_concurrent):
             batch = combos[i : i + max_concurrent]
             futures = [
-                _ray_task.remote(strategy_factory, p, dataset_path, initial_balance) for p in batch
+                _ray_task.remote(
+                    strategy_factory,
+                    p,
+                    dataset_path,
+                    initial_balance,
+                    fee_bps,
+                    slippage_bps,
+                    max_position_fraction,
+                )
+                for p in batch
             ]
             results.extend(ray.get(futures))
     else:
-        results = [_run_single(strategy_factory, p, dataset_path, initial_balance) for p in combos]
+        results = [
+            _run_single(
+                strategy_factory,
+                p,
+                dataset_path,
+                initial_balance,
+                fee_bps,
+                slippage_bps,
+                max_position_fraction,
+            )
+            for p in combos
+        ]
 
     results.sort(key=lambda r: r["total_pnl"], reverse=True)
     return results
