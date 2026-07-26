@@ -17,7 +17,7 @@ dependencies = [
     "bytewax>=0.21.0",
     # Challenge 3 — distributed backtesting
     "ray>=2.40.0",
-    "lance>=0.27.0",
+    "pylance>=0.27.0",
     # Challenge 4 — zero-copy Arrow pipeline
     "pyarrow>=19.0.0",
     "polars>=1.0.0",
