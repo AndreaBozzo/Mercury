@@ -22,7 +22,7 @@ from nats.js.api import ConsumerConfig
 from pydantic import ValidationError
 
 from brain.adapters.binance_depth import BinanceDepthBootstrapper, parse_binance_depth
-from brain.observability import health_payload, json_response, metrics_payload
+from brain.observability import health_http_status, health_payload, json_response, metrics_payload
 from brain.strategies import build_strategy_from_env
 from core.nats_utils import connect_jetstream, ensure_stream
 from core.order_book import OrderBook
@@ -127,8 +127,13 @@ async def _serve_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
 
         bootstrap_state = _bootstrap_state()
         if path == "/health":
-            body = json_response(health_payload(_books, bootstrap_state))
-            await _write_response(writer, "200 OK", "application/json", body)
+            payload = health_payload(
+                _books,
+                bootstrap_state,
+                order_books_required=getattr(_strategy, "requires_order_book", True),
+            )
+            body = json_response(payload)
+            await _write_response(writer, health_http_status(payload), "application/json", body)
             return
 
         if path == "/metrics":

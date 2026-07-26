@@ -27,6 +27,9 @@ def _fill(strategy: MovingAverageStrategy, price: float, n: int) -> None:
 
 
 class TestMovingAverageStrategy:
+    def test_does_not_require_order_book_readiness(self):
+        assert MovingAverageStrategy.requires_order_book is False
+
     def test_returns_none_during_warmup(self):
         s = MovingAverageStrategy(window=5)
         for i in range(4):

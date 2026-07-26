@@ -40,6 +40,8 @@ class MovingAverageStrategy:
         Fraction above MA that triggers a SELL (e.g. 1.01 = 1% above MA).
     """
 
+    requires_order_book = False
+
     def __init__(
         self,
         window: int = 20,

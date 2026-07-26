@@ -40,6 +40,9 @@ def _warm(
 
 
 class TestOrderBookVwapImbalanceStrategy:
+    def test_requires_order_book_readiness(self):
+        assert OrderBookVwapImbalanceStrategy.requires_order_book is True
+
     def test_returns_none_until_vwap_and_imbalance_are_warm(self):
         strategy = OrderBookVwapImbalanceStrategy(vwap_window=5, imbalance_window=5)
         for _ in range(2):

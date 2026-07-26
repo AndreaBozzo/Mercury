@@ -1,4 +1,4 @@
-from brain.observability import health_payload, metrics_payload
+from brain.observability import health_http_status, health_payload, metrics_payload
 from core.order_book import OrderBook
 
 
@@ -12,10 +12,31 @@ def test_health_payload_reports_ready_and_bootstrap_state():
     )
 
     assert payload["status"] == "degraded"
+    assert payload["order_books_required"] is True
     assert payload["books_ready"] == 1
     assert payload["books_total"] == 2
     assert payload["symbols"]["BTC/USDT"] == {"ready": True, "bootstrapping": False, "seq": 42}
     assert payload["symbols"]["ETH/USDT"] == {"ready": False, "bootstrapping": True, "seq": None}
+
+
+def test_l1_health_is_ready_without_an_order_book():
+    payload = health_payload({}, {}, order_books_required=False)
+
+    assert payload == {
+        "status": "ok",
+        "order_books_required": False,
+        "books_ready": 0,
+        "books_total": 0,
+        "symbols": {},
+    }
+    assert health_http_status(payload) == "200 OK"
+
+
+def test_unready_l2_health_returns_service_unavailable():
+    payload = health_payload({}, {}, order_books_required=True)
+
+    assert payload["status"] == "starting"
+    assert health_http_status(payload) == "503 Service Unavailable"
 
 
 def test_metrics_payload_contains_prometheus_gauges():

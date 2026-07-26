@@ -10,6 +10,8 @@ from core.symbols import normalize_symbol
 
 
 class OrderBookVwapImbalanceStrategy:
+    requires_order_book = True
+
     def __init__(
         self,
         vwap_window: int = 50,

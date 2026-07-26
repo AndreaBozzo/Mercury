@@ -9,6 +9,8 @@ from core.order_book import OrderBook
 def health_payload(
     books: Mapping[str, OrderBook],
     bootstrap_active: Mapping[str, bool],
+    *,
+    order_books_required: bool = True,
 ) -> dict:
     symbols: dict[str, dict] = {}
     ready_count = 0
@@ -28,7 +30,9 @@ def health_payload(
             "seq": seq,
         }
 
-    if not symbols:
+    if not order_books_required:
+        status = "ok"
+    elif not symbols:
         status = "starting"
     elif all(item["ready"] for item in symbols.values()):
         status = "ok"
@@ -39,10 +43,18 @@ def health_payload(
 
     return {
         "status": status,
+        "order_books_required": order_books_required,
         "books_ready": ready_count,
         "books_total": len(symbols),
         "symbols": symbols,
     }
+
+
+def health_http_status(payload: Mapping[str, object]) -> str:
+    """Expose readiness failures to container orchestrators."""
+    if payload.get("status") == "ok":
+        return "200 OK"
+    return "503 Service Unavailable"
 
 
 def metrics_payload(

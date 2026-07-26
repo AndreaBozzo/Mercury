@@ -27,8 +27,8 @@ git status --short
 ```
 
 - [ ] The portable source gate passes from the clean clone.
-- [ ] The unit/component suite reports 243 passes when no external broker is configured.
-- [ ] CI reports 245 passes when its real-NATS integration environment is enabled.
+- [ ] The unit/component suite reports 247 passes when no external broker is configured.
+- [ ] CI reports 249 passes when its real-NATS integration environment is enabled.
 - [ ] The source tree is clean after checks, except ignored build/test artifacts.
 - [ ] The built source and wheel metadata both identify Apache-2.0.
 
