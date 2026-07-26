@@ -211,9 +211,10 @@ uv build
   fully account for external asset transfers or every venue-specific fee representation.
 - The optional Bytewax path acknowledges input before checkpointed processing and does not await
   signal publication; it is experimental.
-- The local Compose profile is not a secured remote deployment, and its images still need one
-  clean-daemon build/run verification before the first release; follow the
-  [public alpha release checklist](docs/RELEASE_CHECKLIST.md).
+- The local Compose profile has been exercised as a hardened local development deployment, but it
+  is not secured for remote use.
+- The complete quickstart still needs one clean run with a real, exact Nephtys revision; follow
+  the [public alpha release checklist](docs/RELEASE_CHECKLIST.md).
 - GitHub private vulnerability reporting must be enabled in repository settings before
   publication.
 

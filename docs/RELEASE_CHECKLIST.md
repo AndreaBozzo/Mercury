@@ -26,17 +26,17 @@ uv run python -m scripts.check
 git status --short
 ```
 
-- [ ] The portable source gate passes from the clean clone.
-- [ ] The unit/component suite reports 251 passes when no external broker is configured.
+- [x] The portable source gate passes from the clean clone.
+- [x] The unit/component suite reports 251 passes when no external broker is configured.
 - [ ] CI reports 253 passes when its real-NATS integration environment is enabled.
-- [ ] The source tree is clean after checks, except ignored build/test artifacts.
-- [ ] The built source and wheel metadata both identify Apache-2.0.
+- [x] The source tree is clean after checks, except ignored build/test artifacts.
+- [x] The built source and wheel metadata both identify Apache-2.0.
 
 ## Secret and data hygiene
 
-- [ ] Search the current tree and every reachable Git object for credentials, private keys,
-  personal data, and archived market data.
-- [ ] Confirm `.env`, exchange credentials, NATS credentials, local archives, quarantined payloads,
+- [x] Search the current tree and every reachable Git object for high-confidence credential and
+  private-key patterns, sensitive filenames, and archived market-data filenames.
+- [x] Confirm `.env`, exchange credentials, NATS credentials, local archives, quarantined payloads,
   coverage data, and audit scratch files are not tracked.
 - [ ] Revoke and replace any credential that has ever been committed; deleting its file is not
   sufficient.
@@ -49,7 +49,7 @@ Use a clean Docker daemon with enough free disk space:
 
 ```bash
 docker compose config --quiet
-docker compose build --pull
+docker compose build --pull --no-cache
 docker compose up -d
 docker compose ps
 curl --fail http://127.0.0.1:9108/health
@@ -62,11 +62,11 @@ docker compose logs --no-color
 docker compose down
 ```
 
-- [ ] Every service becomes healthy without crash/restart loops.
-- [ ] Each application container reports UID `10001`.
-- [ ] Host ports bind only to loopback.
-- [ ] Read-only roots do not prevent normal operation; only declared data/tmp mounts are writable.
-- [ ] Shutdown is clean and NATS consumers/connections drain.
+- [x] Every service becomes healthy without crash/restart loops.
+- [x] Each application container reports UID `10001`.
+- [x] Host ports bind only to loopback.
+- [x] Read-only roots do not prevent normal operation; only declared data/tmp mounts are writable.
+- [x] Shutdown is clean and NATS consumers/connections drain.
 
 The included broker is unauthenticated and unencrypted. Never expose this Compose profile beyond
 the local host.
@@ -74,12 +74,13 @@ the local host.
 ## Mercury and Nephtys interoperability
 
 - [ ] Use an exact, clean Nephtys revision and the documented Coinbase BTC/EUR public profile.
-- [ ] Confirm a representative ticker reaches Brain and Plutarch.
-- [ ] Confirm Executor records `observed` and never constructs an exchange client.
-- [ ] Confirm archive rows contain source, subject, source timestamp, payload, and JetStream stream
+- [x] Confirm a synthetic, contract-compatible Coinbase ticker reaches Brain and Plutarch.
+- [x] Confirm Executor records `observed` and never constructs an exchange client.
+- [x] Confirm archive rows contain source, subject, source timestamp, payload, and JetStream stream
   sequence.
-- [ ] Restart Nephtys, NATS, Brain, Executor, and Plutarch one at a time; record observed loss,
-  redelivery, duplication, and recovery behavior.
+- [x] Restart NATS, Brain, Executor, and Plutarch one at a time; record observed loss, redelivery,
+  duplication, health transitions, and recovery behavior.
+- [ ] Restart a real Nephtys process and confirm its configured connector is restored correctly.
 - [ ] Record the known Nephtys pipeline-persistence limitation in release notes.
 
 ## Release record

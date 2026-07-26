@@ -28,8 +28,10 @@ TradeSignal -> Executor observe mode -> recorded decision, no exchange client or
 - [x] License the project under Apache-2.0.
 - [x] Add contribution, security, conduct, and support policies.
 - [x] Pin container images, run services as non-root, and add health checks.
-- [ ] Exercise the documented quickstart against a clean environment.
+- [ ] Exercise the documented quickstart with an exact real Nephtys revision in a clean
+  environment.
 - [x] Add a small deterministic observation smoke test on real JetStream.
+- [x] Build and run the hardened Compose profile; exercise application and NATS restart recovery.
 - [ ] Define a stable event-envelope compatibility/version policy with Nephtys.
 - [x] Quarantine malformed events in Plutarch without crashing or acknowledging before evidence.
 - [x] Install and exercise the actual Apache Lance package rather than an unrelated namesake.
@@ -69,8 +71,7 @@ The beta should support repeatable data research. It is not a live-trading miles
 - Publish an architecture decision record for the direct Brain path versus experimental Bytewax.
 - Add runbooks for NATS loss, feed loss, archive failure, HALT, recovery, and credential rotation.
 - Expose and document health/metrics for every service in the supported deployment path.
-- Extend the current real-NATS observation/redelivery/archive test with process restart recovery
-  and a real Nephtys connector.
+- Automate the manually verified process/NATS restart recovery and add a real Nephtys connector.
 - Publish release notes and compatibility requirements for Mercury and Nephtys.
 
 ## Future stage: execution research

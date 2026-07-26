@@ -9,8 +9,9 @@
 Mercury now has a tested event-driven observation path, typed domain models, a real Lance archive,
 observable services, fail-closed execution boundaries, and a materially stronger engineering
 baseline than the repository had at the start of this review. The code is a credible
-**observation alpha**. Intentional public release still requires enabling private vulnerability
-reporting and one clean Docker build/run of the documented profile.
+**observation alpha**. Making the repository public still requires enabling private vulnerability
+reporting. Before the first alpha tag, run the documented profile with an exact real Nephtys
+revision and record that compatibility result.
 
 It is not a live-trading system. The most important reason is not venue selection: a successfully
 submitted order can be followed by a process, NATS, or KV failure, after which JetStream may
@@ -55,12 +56,14 @@ regressions, not proof of trading safety.
 | Mypy, including unannotated runtime bodies | Passed |
 | Source and wheel build | Passed |
 | Locked runtime dependency audit | No known advisories reported |
-| Compose render | Passed; image build not run because the local Docker daemon was unavailable |
+| Compose build/runtime | Uncached build passed; all services ran as UID 10001 with read-only roots, dropped capabilities, health checks, and loopback ports |
+| Container observation/recovery drill | 60 synthetic events archived with 60 unique stream identities; one-at-a-time service restarts and a NATS outage recovered without post-recovery errors |
 
 Coverage excludes tests from the numerator/denominator and is not an acceptance threshold. The
 experimental Bytewax path and operational entrypoints remain the weakest areas. The real-broker
 test covers a representative Nephtys envelope through Brain, Executor observation, and Plutarch;
-it does not start a real Nephtys process or prove restart recovery.
+the manual container drill also proves service/NATS restart recovery. Neither starts a real
+Nephtys process.
 
 ## Regulatory and venue boundary
 
@@ -220,9 +223,9 @@ an edge.
 | OP-05 | High | NATS has no authentication/TLS in the sample deployment. | Exposing the sample beyond loopback would expose events, risk state, and control subjects. | **Contained for alpha:** every host port binds loopback and documentation says local-only. A secured remote profile remains future work. |
 | OP-06 | Medium | NATS connection ownership/cleanup was unclear. | Services received JetStream contexts without consistently closing their client. | **Resolved during review:** supported services and the Bytewax bridge own and drain sessions. |
 | OP-07 | Medium | Mypy checked only typed function bodies. | Untyped legacy paths could escape analysis while CI appeared fully type-checked. | **Resolved during review:** `check_untyped_defs` is enabled for all runtime packages and provisioning. |
-| OP-08 | Medium | No automated end-to-end observation test existed. | Unit tests could not prove NATS/Brain/Executor/Plutarch compatibility. | **Partially resolved:** CI runs a real-NATS representative-envelope smoke and redelivery test. A real Nephtys process and restart drill remain. |
+| OP-08 | Medium | No automated end-to-end observation test existed. | Unit tests could not prove NATS/Brain/Executor/Plutarch compatibility. | **Partially resolved:** CI runs a real-NATS representative-envelope smoke and redelivery test; manual service/NATS restart recovery passed. A real Nephtys process and automated restart drill remain. |
 | OP-09 | Medium | Nephtys pipeline updates are not currently persisted. | Restart can restore a stale connector configuration; the old roadmap incorrectly said this was fixed. | Track as a generic Nephtys compatibility issue; do not claim persistence. |
-| OP-10 | Medium | Hardened Compose images were not built in the review environment. | Static render and Dockerfile review cannot catch every build/runtime ownership problem. | Run `docker compose build --pull` and the complete quickstart on a clean Docker daemon before tagging. |
+| OP-10 | Medium | Hardened Compose images had not been built in the review environment. | Static render and Dockerfile review could not catch every build/runtime ownership problem. | **Resolved during review:** an uncached pull/build, full-profile run, hardening inspection, 60-event archive drill, one-at-a-time restart, NATS outage/recovery, and clean shutdown passed. |
 
 ## Alpha definition
 
@@ -260,8 +263,8 @@ The beta acceptance report should include:
 
 ## Recommended sequence
 
-1. Enable GitHub private vulnerability reporting and run the
-   [public alpha release checklist](RELEASE_CHECKLIST.md) on clean source and Docker environments.
+1. Enable GitHub private vulnerability reporting and complete the remaining real-Nephtys and
+   repository-setting items in the [public alpha release checklist](RELEASE_CHECKLIST.md).
 2. Define and test a versioned Nephtys event-envelope contract, including restart persistence.
 3. Add archive quarantine alerts, broker-lag metrics, compaction, retention, and provenance.
 4. Add chronological splits, walk-forward evaluation, cost sensitivity, and confidence intervals.
