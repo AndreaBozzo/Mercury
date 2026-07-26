@@ -83,8 +83,8 @@ availability.
 - [ ] Use one long-lived, rate-limited exchange client with explicit timeouts.
 - [x] Track authoritative free base and quote balances; size BUY and SELL independently.
 - [ ] Make risk reservations and exposure updates atomic under concurrent signals.
-- [ ] Reconcile balances, open orders, and fills without truncating trade history.
-- [ ] Handle multiple fills sharing one exchange timestamp.
+- [x] Reconcile paginated fills without stopping when an early quantity matches the current balance.
+- [x] Persist boundary trade identities so multiple fills can share one exchange timestamp.
 - [ ] Reject stale market price, balance, volatility, risk-limit, and exchange metadata inputs.
 - [ ] Run failure drills for rejected orders, timeouts, partial fills, NATS loss, and restarts.
 

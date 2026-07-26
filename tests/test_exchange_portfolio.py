@@ -56,7 +56,10 @@ async def test_fetch_portfolio_snapshot_uses_exchange_state_for_exposure_and_pnl
     assert snapshot.symbols["BTC/USDT"].unrealized_pnl == 10.0
     assert snapshot.quote_free == {"USDT": 1000.0}
     assert snapshot.asset_free == {"BTC": 0.4, "USDT": 1000.0}
-    assert exchange.calls == [("BTC/USDT", 0, 200, None)]
+    assert exchange.calls == [
+        ("BTC/USDT", 0, 200, None),
+        ("BTC/USDT", 3, 200, None),
+    ]
     assert exchange.closed is True
 
 
@@ -102,6 +105,7 @@ async def test_fetch_portfolio_snapshot_pages_trade_history_for_carried_position
     assert exchange.calls == [
         ("BTC/USDT", 0, 200, None),
         ("BTC/USDT", 2, 200, None),
+        ("BTC/USDT", 3, 200, None),
     ]
 
 
@@ -121,10 +125,24 @@ class PersistedStateExchange(FakeExchange):
     ):
         assert symbol == "BTC/USDT"
         self.calls.append((symbol, since, limit, params))
-        assert since == 11
-        return [
-            {"id": "sell-2", "timestamp": 12, "side": "sell", "amount": 0.001, "cost": 81.0},
-        ]
+        if since == 10:
+            return [
+                {
+                    "id": "buy-1",
+                    "timestamp": 10,
+                    "side": "buy",
+                    "amount": 1.0,
+                    "cost": 100.0,
+                },
+                {
+                    "id": "sell-2",
+                    "timestamp": 10,
+                    "side": "sell",
+                    "amount": 0.001,
+                    "cost": 0.12,
+                },
+            ]
+        return []
 
 
 @pytest.mark.asyncio
@@ -141,13 +159,19 @@ async def test_fetch_portfolio_snapshot_updates_from_persisted_position_state(mo
                 "quantity": 1.0,
                 "cost_basis": 100.0,
                 "last_trade_timestamp": 10,
+                "last_trade_keys": ["id:buy-1"],
             }
         },
     )
 
     assert snapshot.symbols["BTC/USDT"].quantity == 0.999
     assert snapshot.symbols["BTC/USDT"].cost_basis == pytest.approx(99.9)
-    assert exchange.calls == [("BTC/USDT", 11, 200, None)]
+    assert snapshot.symbols["BTC/USDT"].last_trade_timestamp == 10
+    assert snapshot.symbols["BTC/USDT"].last_trade_keys == ("id:buy-1", "id:sell-2")
+    assert exchange.calls == [
+        ("BTC/USDT", 10, 200, None),
+        ("BTC/USDT", 11, 200, None),
+    ]
 
 
 def test_build_persisted_position_state_tracks_latest_trade_timestamp():
@@ -160,6 +184,7 @@ def test_build_persisted_position_state_tracks_latest_trade_timestamp():
                 "quantity": 0.5,
                 "cost_basis": 50.0,
                 "last_trade_timestamp": 3,
+                "last_trade_keys": ("id:trade-3",),
             },
         )(),
     )
@@ -169,7 +194,133 @@ def test_build_persisted_position_state_tracks_latest_trade_timestamp():
         "quantity": 0.5,
         "cost_basis": 50.0,
         "last_trade_timestamp": 3,
+        "last_trade_keys": ["id:trade-3"],
     }
+
+
+class SellRebuyHistoryExchange(FakeExchange):
+    async def fetch_balance(self):
+        return {
+            "free": {"BTC": 1.0, "USDT": 0.0},
+            "total": {"BTC": 1.0, "USDT": 0.0},
+        }
+
+    async def fetch_my_trades(
+        self,
+        symbol: str,
+        since: int | None = None,
+        limit: int = 200,
+        params=None,
+    ):
+        self.calls.append((symbol, since, limit, params))
+        pages = {
+            0: [
+                {
+                    "id": "buy-old",
+                    "timestamp": 1,
+                    "side": "buy",
+                    "amount": 1.0,
+                    "cost": 100.0,
+                }
+            ],
+            2: [
+                {
+                    "id": "sell-old",
+                    "timestamp": 2,
+                    "side": "sell",
+                    "amount": 1.0,
+                    "cost": 120.0,
+                },
+                {
+                    "id": "buy-current",
+                    "timestamp": 3,
+                    "side": "buy",
+                    "amount": 1.0,
+                    "cost": 200.0,
+                },
+            ],
+        }
+        return list(pages.get(since, []))
+
+
+@pytest.mark.asyncio
+async def test_initial_reconciliation_does_not_stop_before_later_sell_rebuy_cycle(monkeypatch):
+    exchange = SellRebuyHistoryExchange()
+    monkeypatch.setattr("executor.exchange_client.get_exchange", lambda: exchange)
+
+    snapshot = await fetch_portfolio_snapshot(["BTC/USDT"])
+
+    assert snapshot.symbols["BTC/USDT"].quantity == 1.0
+    assert snapshot.symbols["BTC/USDT"].cost_basis == 200.0
+    assert exchange.calls == [
+        ("BTC/USDT", 0, 200, None),
+        ("BTC/USDT", 2, 200, None),
+        ("BTC/USDT", 4, 200, None),
+    ]
+
+
+class FullRebuildExchange(FakeExchange):
+    async def fetch_balance(self):
+        return {
+            "free": {"BTC": 1.0, "USDT": 0.0},
+            "total": {"BTC": 1.0, "USDT": 0.0},
+        }
+
+    async def fetch_my_trades(
+        self,
+        symbol: str,
+        since: int | None = None,
+        limit: int = 200,
+        params=None,
+    ):
+        self.calls.append((symbol, since, limit, params))
+        if since == 0:
+            return [
+                {
+                    "id": "buy-current",
+                    "timestamp": 1,
+                    "side": "buy",
+                    "amount": 1.0,
+                    "cost": 100.0,
+                }
+            ]
+        return []
+
+
+@pytest.mark.asyncio
+async def test_legacy_timestamp_without_trade_keys_triggers_full_rebuild(monkeypatch):
+    exchange = FullRebuildExchange()
+    monkeypatch.setattr("executor.exchange_client.get_exchange", lambda: exchange)
+
+    snapshot = await fetch_portfolio_snapshot(
+        ["BTC/USDT"],
+        persisted_positions={
+            "BTC/USDT": {
+                "symbol": "BTC/USDT",
+                "quantity": 1.0,
+                "cost_basis": 999.0,
+                "last_trade_timestamp": 10,
+            }
+        },
+    )
+
+    assert snapshot.symbols["BTC/USDT"].cost_basis == 100.0
+    assert exchange.calls == [
+        ("BTC/USDT", 0, 200, None),
+        ("BTC/USDT", 2, 200, None),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_trade_history_page_limit_fails_closed(monkeypatch):
+    exchange = FakeExchange()
+    monkeypatch.setattr("executor.exchange_client.get_exchange", lambda: exchange)
+    monkeypatch.setattr("executor.exchange_client.TRADE_HISTORY_MAX_PAGES", 1)
+
+    with pytest.raises(RuntimeError, match="refusing a truncated cost basis"):
+        await fetch_portfolio_snapshot(["BTC/USDT"])
+
+    assert exchange.closed is True
 
 
 class FakeSnapshot:

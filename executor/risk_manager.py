@@ -128,7 +128,7 @@ async def load_position_states(
 
 async def save_position_states(
     js: JetStreamContext,
-    states: dict[str, dict[str, float | int | str | None]],
+    states: dict[str, dict[str, Any]],
 ) -> None:
     kv = await js.key_value(KV_BUCKET)
 

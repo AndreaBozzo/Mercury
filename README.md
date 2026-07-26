@@ -193,7 +193,8 @@ uv build
   partial fills, venue rejects, and venue-specific rules.
 - A signal redelivered after a partially completed live order can still create an ambiguous or
   duplicate execution; this is why live mode is disabled.
-- Portfolio cost-basis reconstruction can be wrong for long or same-timestamp trade histories.
+- Portfolio cost basis still depends on the venue retaining complete trade history and does not
+  fully account for external asset transfers or every venue-specific fee representation.
 - The optional Bytewax path acknowledges input before checkpointed processing and does not await
   signal publication; it is experimental.
 - Public-release governance files and a project licence still require an owner decision.

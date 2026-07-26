@@ -1,4 +1,6 @@
 import asyncio
+import hashlib
+import json
 import logging
 import os
 from collections.abc import Mapping
@@ -43,6 +45,7 @@ class SymbolPortfolioState:
     market_value: float
     unrealized_pnl: float
     last_trade_timestamp: int | None = None
+    last_trade_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -60,6 +63,7 @@ class PersistedPositionState:
     quantity: float
     cost_basis: float
     last_trade_timestamp: int | None = None
+    last_trade_keys: tuple[str, ...] = ()
 
 
 def _env_flag(name: str, default: bool) -> bool:
@@ -357,7 +361,7 @@ async def _fetch_symbol_portfolio_state(
     quantity = _balance_total(balance, base_asset)
     ticker = await exchange.fetch_ticker(normalized)
     mark_price = _ticker_price(ticker)
-    cost_basis, last_trade_timestamp = await _cost_basis_from_exchange_trades(
+    cost_basis, last_trade_timestamp, last_trade_keys = await _cost_basis_from_exchange_trades(
         exchange,
         normalized,
         quantity,
@@ -374,6 +378,7 @@ async def _fetch_symbol_portfolio_state(
         market_value=market_value,
         unrealized_pnl=unrealized_pnl,
         last_trade_timestamp=last_trade_timestamp,
+        last_trade_keys=last_trade_keys,
     )
 
 
@@ -409,56 +414,48 @@ async def _cost_basis_from_exchange_trades(
     symbol: str,
     balance_qty: float,
     persisted_state: PersistedPositionState | None,
-) -> tuple[float, int | None]:
-    if balance_qty <= 0:
-        return 0.0, persisted_state.last_trade_timestamp if persisted_state else None
-
+) -> tuple[float, int | None, tuple[str, ...]]:
     net_qty = persisted_state.quantity if persisted_state is not None else 0.0
     cost_basis = persisted_state.cost_basis if persisted_state is not None else 0.0
     trades = await _fetch_trade_history(
         exchange,
         symbol,
         since_timestamp=persisted_state.last_trade_timestamp if persisted_state else None,
-        min_quantity=balance_qty,
-        initial_quantity=net_qty,
+        boundary_trade_keys=persisted_state.last_trade_keys if persisted_state else (),
     )
     net_qty, cost_basis = _apply_trades_to_position(
         trades,
         initial_quantity=net_qty,
         initial_cost_basis=cost_basis,
     )
-    last_trade_timestamp = _latest_trade_timestamp(trades)
-    if last_trade_timestamp is None and persisted_state is not None:
-        last_trade_timestamp = persisted_state.last_trade_timestamp
+    last_trade_timestamp, last_trade_keys = _advance_trade_cursor(
+        persisted_state.last_trade_timestamp if persisted_state else None,
+        persisted_state.last_trade_keys if persisted_state else (),
+        trades,
+    )
 
     if balance_qty <= 0 or net_qty <= 0:
-        return 0.0, last_trade_timestamp
+        return 0.0, last_trade_timestamp, last_trade_keys
 
     if abs(balance_qty - net_qty) <= 1e-9:
-        return cost_basis, last_trade_timestamp
+        return cost_basis, last_trade_timestamp, last_trade_keys
 
-    return cost_basis * max(0.0, min(1.0, balance_qty / net_qty)), last_trade_timestamp
+    return (
+        cost_basis * max(0.0, min(1.0, balance_qty / net_qty)),
+        last_trade_timestamp,
+        last_trade_keys,
+    )
 
 
 async def _fetch_trade_history(
     exchange: ccxt.Exchange,
     symbol: str,
     since_timestamp: int | None,
-    min_quantity: float,
-    initial_quantity: float,
+    boundary_trade_keys: tuple[str, ...],
 ) -> list[dict[str, Any]]:
     all_trades: list[dict[str, Any]] = []
-
-    if since_timestamp is not None:
-        trades = await exchange.fetch_my_trades(
-            symbol,
-            since=since_timestamp + 1,
-            limit=TRADE_HISTORY_PAGE_LIMIT,
-        )
-        return _dedupe_sorted_trades(trades)
-
-    cursor_since = 0
-    reconstructed_quantity = initial_quantity
+    cursor_since = since_timestamp if since_timestamp is not None else 0
+    boundary_keys = set(boundary_trade_keys)
 
     for _page in range(TRADE_HISTORY_MAX_PAGES):
         trades = await exchange.fetch_my_trades(
@@ -470,15 +467,27 @@ async def _fetch_trade_history(
             break
 
         page = _dedupe_sorted_trades(trades)
+        if since_timestamp is not None:
+            page = [
+                trade
+                for trade in page
+                if _trade_timestamp(trade) > since_timestamp
+                or (
+                    _trade_timestamp(trade) == since_timestamp
+                    and _trade_key(trade) not in boundary_keys
+                )
+            ]
         all_trades = _merge_trade_history(all_trades, page)
-        reconstructed_quantity, _ = _apply_trades_to_position(all_trades)
-        if reconstructed_quantity >= max(min_quantity - 1e-9, 0.0):
-            break
 
-        newest_timestamp = max(int(trade.get("timestamp") or 0) for trade in page)
+        newest_timestamp = max(_trade_timestamp(trade) for trade in trades)
         if newest_timestamp < cursor_since:
             break
         cursor_since = newest_timestamp + 1
+    else:
+        raise RuntimeError(
+            f"Trade history for {symbol} exceeded TRADE_HISTORY_MAX_PAGES="
+            f"{TRADE_HISTORY_MAX_PAGES}; refusing a truncated cost basis"
+        )
 
     return all_trades
 
@@ -500,27 +509,68 @@ def _coerce_persisted_position_state(
         return None
 
     raw_timestamp = raw.get("last_trade_timestamp")
-    timestamp = int(raw_timestamp) if raw_timestamp is not None else None
+    try:
+        timestamp = int(raw_timestamp) if raw_timestamp is not None else None
+    except (TypeError, ValueError):
+        return None
+    raw_trade_keys = raw.get("last_trade_keys")
+    if timestamp is not None and raw_trade_keys is None:
+        # Pre-cursor state cannot safely deduplicate an inclusive timestamp
+        # overlap. Rebuild from full history instead.
+        return None
+    if raw_trade_keys is None:
+        raw_trade_keys = []
+    if not isinstance(raw_trade_keys, list) or not all(
+        isinstance(key, str) and key for key in raw_trade_keys
+    ):
+        return None
     return PersistedPositionState(
         symbol=symbol,
         quantity=max(0.0, quantity),
         cost_basis=max(0.0, cost_basis),
         last_trade_timestamp=timestamp,
+        last_trade_keys=tuple(sorted(set(raw_trade_keys))),
     )
+
+
+def _trade_timestamp(trade: Mapping[str, Any]) -> int:
+    try:
+        return int(trade.get("timestamp") or 0)
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _trade_key(trade: Mapping[str, Any]) -> str:
+    trade_id = trade.get("id")
+    if trade_id is not None and str(trade_id):
+        return f"id:{trade_id}"
+
+    identity_fields = {
+        field: trade.get(field)
+        for field in (
+            "timestamp",
+            "datetime",
+            "order",
+            "symbol",
+            "side",
+            "amount",
+            "price",
+            "cost",
+            "takerOrMaker",
+            "fee",
+        )
+    }
+    encoded = json.dumps(identity_fields, sort_keys=True, separators=(",", ":"), default=str)
+    return f"fallback:{hashlib.sha256(encoded.encode()).hexdigest()}"
 
 
 def _dedupe_sorted_trades(trades: list[dict[str, Any]]) -> list[dict[str, Any]]:
     unique: dict[str, dict[str, Any]] = {}
-    fallback_index = 0
 
     for trade in trades:
-        trade_id = trade.get("id")
-        if trade_id is None:
-            trade_id = f"fallback-{fallback_index}"
-            fallback_index += 1
-        unique[str(trade_id)] = trade
+        unique[_trade_key(trade)] = trade
 
-    return sorted(unique.values(), key=lambda item: int(item.get("timestamp") or 0))
+    return sorted(unique.values(), key=lambda item: (_trade_timestamp(item), _trade_key(item)))
 
 
 def _merge_trade_history(
@@ -530,21 +580,26 @@ def _merge_trade_history(
     merged: dict[str, dict[str, Any]] = {}
 
     for trade in older + newer:
-        trade_id = trade.get("id")
-        if trade_id is None:
-            trade_id = f"fallback-{int(trade.get('timestamp') or 0)}-{len(merged)}"
-        merged[str(trade_id)] = trade
+        merged[_trade_key(trade)] = trade
 
-    return sorted(merged.values(), key=lambda item: int(item.get("timestamp") or 0))
+    return sorted(merged.values(), key=lambda item: (_trade_timestamp(item), _trade_key(item)))
 
 
-def _latest_trade_timestamp(trades: list[dict[str, Any]]) -> int | None:
-    timestamps = [
-        int(trade.get("timestamp") or 0) for trade in trades if trade.get("timestamp") is not None
-    ]
-    if not timestamps:
-        return None
-    return max(timestamps)
+def _advance_trade_cursor(
+    previous_timestamp: int | None,
+    previous_keys: tuple[str, ...],
+    trades: list[dict[str, Any]],
+) -> tuple[int | None, tuple[str, ...]]:
+    if not trades:
+        return previous_timestamp, previous_keys
+
+    latest_timestamp = max(_trade_timestamp(trade) for trade in trades)
+    latest_keys = {
+        _trade_key(trade) for trade in trades if _trade_timestamp(trade) == latest_timestamp
+    }
+    if previous_timestamp == latest_timestamp:
+        latest_keys.update(previous_keys)
+    return latest_timestamp, tuple(sorted(latest_keys))
 
 
 def build_persisted_position_state(
@@ -555,6 +610,7 @@ def build_persisted_position_state(
         "quantity": symbol_state.quantity,
         "cost_basis": symbol_state.cost_basis,
         "last_trade_timestamp": symbol_state.last_trade_timestamp,
+        "last_trade_keys": list(symbol_state.last_trade_keys),
     }
 
 
@@ -578,7 +634,7 @@ def _apply_trades_to_position(
     net_qty = max(0.0, initial_quantity)
     cost_basis = max(0.0, initial_cost_basis)
 
-    for trade in sorted(trades, key=lambda item: int(item.get("timestamp") or 0)):
+    for trade in sorted(trades, key=lambda item: (_trade_timestamp(item), _trade_key(item))):
         side = str(trade.get("side") or "").strip().lower()
         amount = _as_float(trade.get("amount")) or 0.0
         trade_cost = _as_float(trade.get("cost"))
