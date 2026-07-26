@@ -70,6 +70,13 @@ class BacktestResult:
     turnover: float = 0.0
     open_positions: int = 0
     unfilled_signals: int = 0
+    events_seen: int = 0
+    events_processed: int = 0
+    invalid_events: int = 0
+    duplicate_events: int = 0
+    events_with_exposure: int = 0
+    first_event_timestamp: int | None = None
+    last_event_timestamp: int | None = None
     fee_bps: float = 10.0
     slippage_bps: float = 5.0
     signals: list[TradeSignal] = field(default_factory=list, repr=False)
@@ -95,6 +102,16 @@ class BacktestResult:
         standard_deviation = variance**0.5
         return mean / standard_deviation if standard_deviation else 0.0
 
+    @property
+    def event_coverage(self) -> float:
+        return self.events_processed / self.events_seen if self.events_seen else 0.0
+
+    @property
+    def exposure_rate(self) -> float:
+        if not self.events_processed:
+            return 0.0
+        return self.events_with_exposure / self.events_processed
+
     def to_dict(self) -> dict:
         return {
             "strategy_id": self.strategy_id,
@@ -113,6 +130,15 @@ class BacktestResult:
             "turnover": self.turnover,
             "open_positions": self.open_positions,
             "unfilled_signals": self.unfilled_signals,
+            "events_seen": self.events_seen,
+            "events_processed": self.events_processed,
+            "invalid_events": self.invalid_events,
+            "duplicate_events": self.duplicate_events,
+            "event_coverage": self.event_coverage,
+            "events_with_exposure": self.events_with_exposure,
+            "exposure_rate": self.exposure_rate,
+            "first_event_timestamp": self.first_event_timestamp,
+            "last_event_timestamp": self.last_event_timestamp,
             "fee_bps": self.fee_bps,
             "slippage_bps": self.slippage_bps,
             "win_rate": self.win_rate,
@@ -125,6 +151,15 @@ class _Position:
     quantity: float
     entry_price: float
     entry_cost: float
+
+
+def _optional_int(raw: Any) -> int | None:
+    try:
+        if raw is None:
+            return None
+        return int(raw)
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 class BacktestEngine:
@@ -175,6 +210,7 @@ class BacktestEngine:
         peak_equity = self.initial_balance
         positions: dict[tuple[str, str], _Position] = {}
         marks: dict[tuple[str, str], float] = {}
+        seen_stream_sequences: set[tuple[str, int]] = set()
         fee_rate = self.fee_bps / 10_000
         slippage_rate = self.slippage_bps / 10_000
 
@@ -182,16 +218,41 @@ class BacktestEngine:
         for arrow_batch in dataset.to_batches(batch_size=batch_size):
             frame = arrow_batch.to_pandas()
             for _, row in frame.iterrows():
+                result.events_seen += 1
+                stream_sequence = _optional_int(row.get("_stream_sequence"))
+                if stream_sequence is not None and stream_sequence >= 1:
+                    broker_key = (str(row.get("_subject") or ""), stream_sequence)
+                    if broker_key in seen_stream_sequences:
+                        result.duplicate_events += 1
+                        continue
+                    seen_stream_sequences.add(broker_key)
+
                 payload = _payload_from_row(row)
                 try:
+                    timestamp = int(row.get("timestamp", 0))
+                    sequence = _optional_int(row.get("seq"))
                     event = MarketEvent(
                         source=str(row.get("source", "archive")),
                         type=str(row.get("type", "trade")),
-                        timestamp=int(row.get("timestamp", 0)),
+                        timestamp=timestamp,
                         payload=payload,
+                        seq=sequence if sequence is not None and sequence >= 0 else None,
                     )
                 except Exception:
+                    result.invalid_events += 1
                     continue
+
+                result.events_processed += 1
+                if (
+                    result.first_event_timestamp is None
+                    or event.timestamp < result.first_event_timestamp
+                ):
+                    result.first_event_timestamp = event.timestamp
+                if (
+                    result.last_event_timestamp is None
+                    or event.timestamp > result.last_event_timestamp
+                ):
+                    result.last_event_timestamp = event.timestamp
 
                 source_key = event.source.strip().casefold()
                 try:
@@ -218,6 +279,8 @@ class BacktestEngine:
                         slippage_rate,
                     )
 
+                if positions:
+                    result.events_with_exposure += 1
                 equity = self._equity(
                     cash,
                     positions,

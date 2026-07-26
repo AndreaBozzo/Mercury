@@ -21,7 +21,7 @@ Example
 
     grid    = grid_from_ranges(window=(10, 61, 10))
     results = parameter_sweep(MovingAverageStrategy, grid,
-                              "data/history/market_history.lance")
+                              "data/history/market_history_v2.lance")
 
     for r in results[:5]:
         print(r)

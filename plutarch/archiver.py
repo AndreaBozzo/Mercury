@@ -14,8 +14,9 @@ Durability contract (must hold for live post-mortems):
   3. If `flush_buffer_to_lance` raises, the unflushed payloads are written to
      a quarantine NDJSON file (`PLUTARCH_QUARANTINE_DIR`) and the consumer
      continues from that durable record.
-  4. Schema is fixed: {source, type, timestamp, seq, payload_json, _subject,
-     _archived_at_ns}. Lance never sees a schema-drift batch.
+  4. Schema v2 is fixed: {source, type, timestamp, seq, payload_json, _subject,
+     _stream_sequence, _archived_at_ns}. The broker stream sequence lets replay
+     identify a duplicate created by write-success/ack-failure redelivery.
   5. Invalid messages are ACKed only after their exact raw bytes and validation
      error have been durably written to quarantine.
 """
@@ -50,7 +51,7 @@ STREAM_NAME = os.getenv("PLUTARCH_STREAM_NAME", "nephtys_crypto")
 STREAM_SUBJECT = os.getenv("PLUTARCH_STREAM_SUBJECT", "nephtys.stream.crypto.*")
 DURABLE_NAME = os.getenv("PLUTARCH_DURABLE_NAME", "plutarch_archiver")
 DATA_DIR = os.getenv("PLUTARCH_DATA_DIR", "data/history")
-DATASET_NAME = os.getenv("PLUTARCH_DATASET_NAME", "market_history.lance")
+DATASET_NAME = os.getenv("PLUTARCH_DATASET_NAME", "market_history_v2.lance")
 QUARANTINE_DIR = os.getenv("PLUTARCH_QUARANTINE_DIR", "data/quarantine")
 BATCH_SIZE = int(os.getenv("PLUTARCH_BATCH_SIZE", "500"))
 FLUSH_INTERVAL_SEC = float(os.getenv("PLUTARCH_FLUSH_INTERVAL_SEC", "30"))
@@ -75,6 +76,7 @@ ARCHIVE_SCHEMA = pa.schema(
         pa.field("seq", pa.int64()),
         pa.field("payload_json", pa.string()),
         pa.field("_subject", pa.string()),
+        pa.field("_stream_sequence", pa.int64()),
         pa.field("_archived_at_ns", pa.int64()),
     ]
 )
@@ -95,7 +97,11 @@ _state: dict[str, Any] = {
 }
 
 
-def _row_from_envelope(envelope: dict[str, Any], subject: str) -> dict[str, Any]:
+def _row_from_envelope(
+    envelope: dict[str, Any],
+    subject: str,
+    stream_sequence: int | None = None,
+) -> dict[str, Any]:
     """Project the Nephtys StreamEvent envelope onto the fixed archive schema."""
     inner = envelope.get("payload")
     if not isinstance(inner, dict):
@@ -110,6 +116,7 @@ def _row_from_envelope(envelope: dict[str, Any], subject: str) -> dict[str, Any]
         "seq": int(seq),
         "payload_json": json.dumps(inner, separators=(",", ":"), sort_keys=True),
         "_subject": subject,
+        "_stream_sequence": stream_sequence,
         "_archived_at_ns": time.time_ns(),
     }
 
@@ -178,7 +185,11 @@ async def _row_or_quarantine(msg: Any) -> dict[str, Any] | None:
         envelope = json.loads(msg.data.decode("utf-8"))
         if not isinstance(envelope, dict):
             raise ValueError("event envelope must be a JSON object")
-        return _row_from_envelope(envelope, str(msg.subject))
+        return _row_from_envelope(
+            envelope,
+            str(msg.subject),
+            _broker_stream_sequence(msg),
+        )
     except Exception as exc:
         logger.warning(
             "Plutarch: invalid event on subject %s: %s",
@@ -186,6 +197,15 @@ async def _row_or_quarantine(msg: Any) -> dict[str, Any] | None:
             exc,
         )
         await _quarantine_invalid_message(msg, exc)
+        return None
+
+
+def _broker_stream_sequence(msg: Any) -> int | None:
+    try:
+        raw = msg.metadata.sequence.stream
+        sequence = int(raw)
+        return sequence if sequence >= 1 else None
+    except (AttributeError, TypeError, ValueError):
         return None
 
 

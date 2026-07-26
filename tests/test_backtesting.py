@@ -74,6 +74,12 @@ class TestBacktestResult:
             "turnover",
             "open_positions",
             "unfilled_signals",
+            "events_seen",
+            "events_processed",
+            "invalid_events",
+            "duplicate_events",
+            "event_coverage",
+            "exposure_rate",
             "max_drawdown",
             "win_rate",
             "sharpe",
@@ -204,6 +210,39 @@ class TestBacktestEngine:
         # Should not raise
         result = engine.run("fake.lance")
         assert result is not None
+        assert result.events_seen == 2
+        assert result.events_processed == 1
+        assert result.invalid_events == 1
+        assert result.event_coverage == pytest.approx(0.5)
+
+    def test_broker_redelivery_is_deduplicated(self, mock_lance):
+        rows = [
+            {
+                **_row(100.0, 1),
+                "_subject": "nephtys.stream.crypto.btc",
+                "_stream_sequence": 42,
+            },
+            {
+                **_row(100.0, 1),
+                "_subject": "nephtys.stream.crypto.btc",
+                "_stream_sequence": 42,
+            },
+        ]
+        mock_lance.dataset.return_value = _make_mock_dataset(rows)
+
+        class _CountingStrategy:
+            def __init__(self):
+                self.calls = 0
+
+            def evaluate(self, _event: MarketEvent) -> None:
+                self.calls += 1
+
+        result = BacktestEngine(_CountingStrategy, {}).run("fake.lance")
+
+        assert result.events_seen == 2
+        assert result.events_processed == 1
+        assert result.duplicate_events == 1
+        assert result.event_coverage == pytest.approx(0.5)
 
     def test_same_engine_can_be_run_twice_without_state_leakage(self, mock_lance):
         rows = [_row(100.0, i) for i in range(5)] + [_row(97.9, 5), _row(103.0, 6)]

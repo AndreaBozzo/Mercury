@@ -177,6 +177,7 @@ async def test_mixed_event_types_share_one_schema(monkeypatch):
         "seq",
         "payload_json",
         "_subject",
+        "_stream_sequence",
         "_archived_at_ns",
     }
 
@@ -215,6 +216,20 @@ def test_envelope_missing_fields_does_not_crash():
     assert row["seq"] == -1
     assert row["payload_json"] == "{}"
     assert row["_subject"] == "subj"
+    assert row["_stream_sequence"] is None
+
+
+@pytest.mark.asyncio
+async def test_row_retains_broker_stream_sequence():
+    from plutarch import archiver
+
+    msg = FakeMsg("nephtys.stream.crypto.btc", _envelope())
+    msg.metadata = SimpleNamespace(sequence=SimpleNamespace(stream=42))
+
+    row = await archiver._row_or_quarantine(msg)
+
+    assert row is not None
+    assert row["_stream_sequence"] == 42
 
 
 @pytest.mark.asyncio
