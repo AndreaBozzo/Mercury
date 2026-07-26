@@ -1,51 +1,144 @@
-version: '3.8'
-
 services:
   nats:
-    image: nats:latest
+    build:
+      context: .
+      dockerfile: nats.Dockerfile
+    image: mercury-nats:2.14.3
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     ports:
-      - "4222:4222"
-      - "8222:8222"
-    # JetStream needs an on-disk store to survive container restarts.
-    command: ["-js", "-sd", "/data"]
+      - "127.0.0.1:4222:4222"
+      - "127.0.0.1:8222:8222"
+    command: ["-js", "-sd", "/data", "-m", "8222"]
     volumes:
       - nats-data:/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "wget -q -O - 'http://127.0.0.1:8222/healthz?js-enabled-only=true' | grep -q 'ok'",
+        ]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+    restart: unless-stopped
 
   brain:
     build:
       context: .
       dockerfile: brain/Dockerfile
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     environment:
-      - NATS_URL=nats://nats:4222
+      NATS_URL: nats://nats:4222
+      BRAIN_HTTP_HOST: 0.0.0.0
+    ports:
+      - "127.0.0.1:9108:9108"
     depends_on:
-      - nats
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9108/health', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
 
   executor:
     build:
       context: .
       dockerfile: executor/Dockerfile
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     environment:
-      - NATS_URL=nats://nats:4222
+      NATS_URL: nats://nats:4222
+      EXECUTOR_HTTP_HOST: 0.0.0.0
     env_file:
-      - .env
+      - path: .env.example
+      - path: .env
+        required: false
+    ports:
+      - "127.0.0.1:9109:9109"
     depends_on:
-      - nats
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9109/health', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
 
   plutarch:
     build:
       context: .
       dockerfile: plutarch/Dockerfile
+    init: true
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    tmpfs:
+      - /tmp
     environment:
-      - NATS_URL=nats://nats:4222
-      - PLUTARCH_DATA_DIR=/data/history
-      - PLUTARCH_QUARANTINE_DIR=/data/quarantine
-      - PLUTARCH_HTTP_HOST=0.0.0.0
+      NATS_URL: nats://nats:4222
+      PLUTARCH_DATA_DIR: /data/history
+      PLUTARCH_QUARANTINE_DIR: /data/quarantine
+      PLUTARCH_HTTP_HOST: 0.0.0.0
     ports:
-      - "9110:9110"
+      - "127.0.0.1:9110:9110"
     volumes:
       - plutarch-data:/data
     depends_on:
-      - nats
+      nats:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9110/health', timeout=2).read()",
+        ]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
 
 volumes:
   nats-data:
