@@ -41,7 +41,7 @@ jobs:
         run: uv run ruff format --check .
 
       - name: Type check
-        run: uv run mypy core brain executor plutarch backtesting
+        run: uv run mypy core brain executor plutarch backtesting scripts
 
       - name: Run tests
         run: uv run pytest

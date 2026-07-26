@@ -35,7 +35,7 @@ fmt-check:
 	uv run ruff format --check .
 
 typecheck:
-	uv run mypy core brain executor plutarch backtesting
+	uv run mypy core brain executor plutarch backtesting scripts
 
 audit:
 	uv run pip-audit
