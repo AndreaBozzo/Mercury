@@ -44,6 +44,7 @@ def _isolate_state(tmp_path, monkeypatch):
         last_flush_duration_seconds=0.0,
         quarantine_writes=0,
         invalid_messages=0,
+        redelivered_messages=0,
     )
     yield
 
@@ -360,3 +361,36 @@ async def test_ensure_stream_does_not_hide_transport_failure():
 
     with pytest.raises(ConnectionError, match="NATS unavailable"):
         await archiver._ensure_stream(FakeJetStream())
+
+
+def test_consumer_config_has_flush_and_pending_headroom(monkeypatch):
+    from plutarch import archiver
+
+    monkeypatch.setattr(archiver, "BATCH_SIZE", 500)
+    monkeypatch.setattr(archiver, "FLUSH_INTERVAL_SEC", 30.0)
+    monkeypatch.setattr(archiver, "ACK_WAIT_SEC", 120.0)
+    monkeypatch.setattr(archiver, "CONSUMER_MAX_DELIVER", 10)
+    monkeypatch.setattr(archiver, "CONSUMER_MAX_ACK_PENDING", 1000)
+
+    config = archiver._consumer_config()
+
+    assert config.ack_wait == 120.0
+    assert config.max_deliver == 10
+    assert config.max_ack_pending == 1000
+
+
+def test_consumer_config_rejects_ack_wait_shorter_than_flush(monkeypatch):
+    from plutarch import archiver
+
+    monkeypatch.setattr(archiver, "FLUSH_INTERVAL_SEC", 30.0)
+    monkeypatch.setattr(archiver, "ACK_WAIT_SEC", 30.0)
+
+    with pytest.raises(ValueError, match="must exceed"):
+        archiver._consumer_config()
+
+
+def test_delivery_count_defaults_and_reads_redelivery_metadata():
+    from plutarch import archiver
+
+    assert archiver._delivery_count(SimpleNamespace()) == 1
+    assert archiver._delivery_count(SimpleNamespace(metadata=SimpleNamespace(num_delivered=3))) == 3

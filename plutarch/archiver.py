@@ -34,10 +34,12 @@ from pathlib import Path
 from typing import Any
 
 import lance
-import nats
 import pyarrow as pa
 from dotenv import load_dotenv
+from nats.js.api import ConsumerConfig
 from nats.js.errors import NotFoundError
+
+import nats
 
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
@@ -52,6 +54,11 @@ DATASET_NAME = os.getenv("PLUTARCH_DATASET_NAME", "market_history.lance")
 QUARANTINE_DIR = os.getenv("PLUTARCH_QUARANTINE_DIR", "data/quarantine")
 BATCH_SIZE = int(os.getenv("PLUTARCH_BATCH_SIZE", "500"))
 FLUSH_INTERVAL_SEC = float(os.getenv("PLUTARCH_FLUSH_INTERVAL_SEC", "30"))
+ACK_WAIT_SEC = float(os.getenv("PLUTARCH_ACK_WAIT_SEC", "120"))
+CONSUMER_MAX_DELIVER = int(os.getenv("PLUTARCH_CONSUMER_MAX_DELIVER", "10"))
+CONSUMER_MAX_ACK_PENDING = int(
+    os.getenv("PLUTARCH_CONSUMER_MAX_ACK_PENDING", str(max(1000, BATCH_SIZE * 2)))
+)
 HTTP_HOST = os.getenv("PLUTARCH_HTTP_HOST", "127.0.0.1")
 HTTP_PORT = int(os.getenv("PLUTARCH_HTTP_PORT", "9110"))
 
@@ -83,6 +90,7 @@ _state: dict[str, Any] = {
     "last_flush_duration_seconds": 0.0,
     "quarantine_writes": 0,
     "invalid_messages": 0,
+    "redelivered_messages": 0,
     "started_at_ns": time.time_ns(),
 }
 
@@ -212,6 +220,30 @@ async def _ensure_stream(js: Any) -> None:
         )
 
 
+def _consumer_config() -> ConsumerConfig:
+    if ACK_WAIT_SEC <= FLUSH_INTERVAL_SEC:
+        raise ValueError(
+            "PLUTARCH_ACK_WAIT_SEC must exceed PLUTARCH_FLUSH_INTERVAL_SEC so buffered "
+            "messages are not redelivered before their normal flush"
+        )
+    if CONSUMER_MAX_DELIVER < 1:
+        raise ValueError("PLUTARCH_CONSUMER_MAX_DELIVER must be at least 1")
+    if CONSUMER_MAX_ACK_PENDING < BATCH_SIZE:
+        raise ValueError("PLUTARCH_CONSUMER_MAX_ACK_PENDING must be at least PLUTARCH_BATCH_SIZE")
+    return ConsumerConfig(
+        ack_wait=ACK_WAIT_SEC,
+        max_deliver=CONSUMER_MAX_DELIVER,
+        max_ack_pending=CONSUMER_MAX_ACK_PENDING,
+    )
+
+
+def _delivery_count(msg: Any) -> int:
+    try:
+        return max(1, int(msg.metadata.num_delivered))
+    except (AttributeError, TypeError, ValueError):
+        return 1
+
+
 def _stream_subject_covers(configured: str, desired: str) -> bool:
     """Return whether one NATS subject pattern contains the desired pattern."""
     configured_tokens = configured.split(".")
@@ -285,7 +317,11 @@ async def run_archiver() -> None:
     await _ensure_stream(js)
 
     # Pull consumer gives us backpressure for free: no fetch -> no delivery.
-    sub = await js.pull_subscribe(STREAM_SUBJECT, durable=DURABLE_NAME)
+    sub = await js.pull_subscribe(
+        STREAM_SUBJECT,
+        durable=DURABLE_NAME,
+        config=_consumer_config(),
+    )
 
     pending_rows: list[dict[str, Any]] = []
     pending_msgs: list[Any] = []
@@ -299,6 +335,8 @@ async def run_archiver() -> None:
                 msgs = []
 
             for msg in msgs:
+                if _delivery_count(msg) > 1:
+                    _state["redelivered_messages"] += 1
                 row = await _row_or_quarantine(msg)
                 if row is None:
                     continue
@@ -354,6 +392,7 @@ def _healthz_body() -> bytes:
         "write_errors": _state["write_errors"],
         "quarantine_writes": _state["quarantine_writes"],
         "invalid_messages": _state["invalid_messages"],
+        "redelivered_messages": _state["redelivered_messages"],
         "buffer_depth": _state["buffer_depth"],
         "buffer_age_seconds": buffer_age_seconds,
         "last_flush_age_seconds": last_flush_age_seconds,
@@ -375,6 +414,7 @@ def _metrics_body() -> bytes:
         f"plutarch_write_errors_total {_state['write_errors']}",
         f"plutarch_quarantine_writes_total {_state['quarantine_writes']}",
         f"plutarch_invalid_messages_total {_state['invalid_messages']}",
+        f"plutarch_redelivered_messages_total {_state['redelivered_messages']}",
         f"plutarch_buffer_depth {_state['buffer_depth']}",
         f"plutarch_buffer_oldest_age_seconds {buffer_age_seconds}",
         f"plutarch_last_flush_duration_seconds {_state['last_flush_duration_seconds']}",
