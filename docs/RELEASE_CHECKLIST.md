@@ -1,8 +1,8 @@
 # Public alpha release checklist
 
-This is the final evidence gate for making Mercury public. Run it from a fresh clone at the exact
-commit intended for the release. Record the Mercury and Nephtys commit SHAs and the date in the
-release notes.
+This records the final evidence gate used for Mercury's public observation alpha. Run source checks
+from a fresh clone at the exact commit intended for the release. Record the Mercury and Nephtys
+revisions and the date in the release notes.
 
 ## Repository settings and policy
 
@@ -13,26 +13,24 @@ release notes.
   while support is issue-based.
 - [x] CI actions and container inputs are immutable-SHA/digest pinned; Dependabot version updates
   are configured for uv and GitHub Actions.
-- [ ] While still private, enable the dependency graph, Dependabot alerts, and Dependabot security
+- [x] While still private, enable the dependency graph, Dependabot alerts, and Dependabot security
   updates.
-- [ ] Push the exact release commit and wait for its CI run to pass.
-- [ ] Change repository visibility to public.
-- [ ] Immediately enable and verify private vulnerability reporting.
-- [ ] Protect `master`, require the unique `check` status, require pull requests and conversation
+- [x] Push the exact release commit and wait for its CI run to pass.
+- [x] Change repository visibility to public.
+- [x] Immediately enable and verify private vulnerability reporting.
+- [x] Protect `master`, require the unique `check` status, require pull requests and conversation
   resolution, and block force pushes/deletions.
-- [ ] Confirm public secret scanning and push protection are active; enable code scanning default
+- [x] Confirm public secret scanning and push protection are active; enable code scanning default
   setup and resolve any alerts before announcing the release.
 
-The GitHub API audit on 2026-07-26 found the repository private with Issues enabled, Discussions
-disabled, one active CI workflow, no release, and a successful latest pushed CI run at `92aa08a`.
-Dependabot alerts, code scanning, and secret scanning were disabled. Branch protection and rulesets
-were unavailable on the current plan while the repository remained private; GitHub enables those
-features for public repositories on GitHub Free. Private vulnerability reporting likewise becomes
-available only after the visibility change.
+The final GitHub API audit on 2026-07-26 found the repository public with Issues enabled and
+Discussions intentionally disabled. Dependabot alerts and security updates, private vulnerability
+reporting, secret scanning, push protection, and CodeQL default setup for Python and Actions are
+enabled. All three alert APIs reported zero open alerts. `master` requires an up-to-date
+GitHub-Actions `check`, a pull request, resolved conversations, linear history, and enforcement for
+administrators; force pushes and deletion are blocked.
 
-Do not publish a personal email address merely to satisfy the security policy. Change visibility,
-enable private vulnerability reporting immediately, verify the reporting button, and only then
-announce the public release.
+No personal email address is published as a security-reporting workaround.
 
 ## Clean source verification
 
@@ -47,10 +45,10 @@ git status --short
 
 - [x] The portable source gate passes from the clean clone.
 - [x] The unit/component suite reports 258 passes when no external broker is configured.
-- [ ] CI reports 260 passes when its real-NATS integration environment is enabled.
+- [x] CI reports 260 passes when its real-NATS integration environment is enabled.
 - [x] The source tree is clean after checks, except ignored build/test artifacts.
 - [x] The built source and wheel metadata both identify Apache-2.0.
-- [ ] Download CI's `mercury-distributions` artifact and verify `SHA256SUMS`.
+- [x] Download CI's `mercury-distributions` artifact and verify `SHA256SUMS`.
 
 ## Secret and data hygiene
 
@@ -58,10 +56,10 @@ git status --short
   private-key patterns, sensitive filenames, and archived market-data filenames.
 - [x] Confirm `.env`, exchange credentials, NATS credentials, local archives, quarantined payloads,
   coverage data, and audit scratch files are not tracked.
-- [ ] Revoke and replace any credential that has ever been committed; deleting its file is not
-  sufficient.
-- [ ] Confirm the retention and redistribution policy for any dataset published separately from
-  the source repository.
+- [x] The full-history scan found no committed credential requiring revocation. If one is later
+  discovered, revoke or replace it; deleting its file is not sufficient.
+- [x] This source release contains and publishes no market dataset. Define retention, provenance,
+  and redistribution policy before any separate dataset publication.
 
 ## Clean Docker verification
 
@@ -108,5 +106,5 @@ the local host.
 - [x] Summarize known alpha limitations from `README.md` and `docs/ASSESSMENT.md`.
 - [x] State explicitly that live execution is disabled and sandbox execution is experimental.
 - [x] Link the dated ESMA MiCA register rather than claiming permanent venue eligibility.
-- [ ] Tag the verified commit and attach the CI-generated source, wheel, and `SHA256SUMS` files to
-  the GitHub pre-release.
+- [x] Tag the verified commit as `v0.2.0` and attach the CI-generated source, wheel, and
+  `SHA256SUMS` files to the GitHub pre-release.
