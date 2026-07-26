@@ -189,3 +189,45 @@ async def test_bootstrap_restarts_when_first_live_update_has_gap():
     assert calls == 1
     assert not book.is_ready
     assert bootstrap.is_active
+
+
+@pytest.mark.asyncio
+async def test_bootstrap_retries_after_snapshot_fetch_failure():
+    calls = 0
+
+    async def fetch_snapshot(symbol: str) -> BinanceDepthSnapshot:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise RuntimeError("temporary REST failure")
+        return BinanceDepthSnapshot(
+            symbol=symbol,
+            last_update_id=100,
+            bids=[[100.0, 1.0]],
+            asks=[[101.0, 1.0]],
+        )
+
+    book = OrderBook("BTC/USDT")
+    bootstrap = BinanceDepthBootstrapper("BTC/USDT", fetch_snapshot=fetch_snapshot)
+    update = BinanceDepthUpdate(
+        symbol="BTC/USDT",
+        first_seq=101,
+        final_seq=101,
+        timestamp=1,
+        bids=[[100.5, 2.0]],
+        asks=[],
+    )
+
+    assert not await bootstrap.handle_update(update, book)
+    await asyncio.sleep(0)
+
+    with pytest.raises(RuntimeError, match="temporary REST failure"):
+        await bootstrap.handle_update(update, book)
+
+    assert not bootstrap.is_active
+    assert not await bootstrap.handle_update(update, book)
+    await asyncio.sleep(0)
+
+    assert await bootstrap.handle_update(update, book)
+    assert calls == 2
+    assert book.is_ready

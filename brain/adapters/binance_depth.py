@@ -144,8 +144,12 @@ class BinanceDepthBootstrapper:
                 if not self._snapshot_task.done():
                     return False
 
-                self._snapshot = self._snapshot_task.result()
+                completed_task = self._snapshot_task
                 self._snapshot_task = None
+                # Clear the cached task before propagating a fetch failure.
+                # The next delivery can then start a fresh snapshot instead of
+                # re-reading the same failed Task forever.
+                self._snapshot = completed_task.result()
 
             return self._apply_if_ready(book)
 
