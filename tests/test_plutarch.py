@@ -397,9 +397,19 @@ async def test_ensure_stream_accepts_covering_existing_subject():
 
     class FakeJetStream:
         async def stream_info(self, _name):
-            return SimpleNamespace(config=SimpleNamespace(subjects=["nephtys.stream.crypto.>"]))
+            return SimpleNamespace(config=SimpleNamespace(subjects=["nephtys.stream.>"]))
 
     await archiver._ensure_stream(FakeJetStream())
+
+
+@pytest.mark.asyncio
+async def test_ensure_stream_rejects_subject_that_does_not_cover_filter(monkeypatch):
+    from plutarch import archiver
+
+    monkeypatch.setattr(archiver, "STREAM_SUBJECT", "nephtys.stream.metrics.>")
+
+    with pytest.raises(ValueError, match="does not cover Plutarch filter"):
+        await archiver._ensure_stream(object())
 
 
 @pytest.mark.asyncio
@@ -440,6 +450,77 @@ def test_consumer_config_has_flush_and_pending_headroom(monkeypatch):
     assert config.ack_wait == 120.0
     assert config.max_deliver == 10
     assert config.max_ack_pending == 1000
+    assert config.filter_subject == archiver.FILTER_SUBJECT
+
+
+def test_consumer_config_drift_detects_persisted_ack_wait(monkeypatch):
+    from plutarch import archiver
+
+    monkeypatch.setattr(archiver, "ACK_WAIT_SEC", 30.0)
+    monkeypatch.setattr(archiver, "FLUSH_INTERVAL_SEC", 3.0)
+    expected = archiver._consumer_config()
+    actual = archiver.ConsumerConfig(
+        ack_wait=2.0,
+        max_deliver=expected.max_deliver,
+        max_ack_pending=expected.max_ack_pending,
+        filter_subject=expected.filter_subject,
+    )
+
+    drift = archiver._consumer_config_drift(actual, expected)
+
+    assert drift == ["ack_wait=2.0 (expected 30.0)"]
+
+
+@pytest.mark.asyncio
+async def test_open_consumer_rejects_persisted_config_drift(monkeypatch):
+    from plutarch import archiver
+
+    monkeypatch.setattr(archiver, "ACK_WAIT_SEC", 30.0)
+    monkeypatch.setattr(archiver, "FLUSH_INTERVAL_SEC", 3.0)
+    actual = archiver.ConsumerConfig(
+        ack_wait=2.0,
+        max_deliver=archiver.CONSUMER_MAX_DELIVER,
+        max_ack_pending=archiver.CONSUMER_MAX_ACK_PENDING,
+        filter_subject=archiver.FILTER_SUBJECT,
+    )
+
+    class FakeJetStream:
+        async def consumer_info(self, _stream, _durable):
+            return SimpleNamespace(config=actual)
+
+        async def pull_subscribe(self, *_args, **_kwargs):
+            raise AssertionError("drifted consumer must not be bound")
+
+    with pytest.raises(RuntimeError, match=r"incompatible persisted configuration.*ack_wait"):
+        await archiver._open_consumer(FakeJetStream())
+
+
+@pytest.mark.asyncio
+async def test_open_consumer_creates_missing_durable_with_explicit_stream():
+    from plutarch import archiver
+
+    class FakeJetStream:
+        def __init__(self):
+            self.subscription: tuple[tuple[Any, ...], dict[str, Any]] | None = None
+
+        async def consumer_info(self, _stream, _durable):
+            raise NotFoundError()
+
+        async def pull_subscribe(self, *args, **kwargs):
+            self.subscription = (args, kwargs)
+            return "subscription"
+
+    js = FakeJetStream()
+
+    result = await archiver._open_consumer(js)
+
+    assert result == "subscription"
+    assert js.subscription is not None
+    args, kwargs = js.subscription
+    assert args == (archiver.FILTER_SUBJECT,)
+    assert kwargs["durable"] == archiver.DURABLE_NAME
+    assert kwargs["stream"] == archiver.STREAM_NAME
+    assert kwargs["config"].filter_subject == archiver.FILTER_SUBJECT
 
 
 def test_consumer_config_rejects_ack_wait_shorter_than_flush(monkeypatch):

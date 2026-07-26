@@ -1,6 +1,7 @@
 import json
 
 import pytest
+from nats.js.errors import NotFoundError
 
 from brain.main import get_market_handler, subscribe_market_events
 
@@ -61,6 +62,9 @@ async def test_market_subscription_disables_callback_auto_ack():
     class FakeJetStream:
         def __init__(self):
             self.kwargs = None
+
+        async def consumer_info(self, _stream, _durable):
+            raise NotFoundError()
 
         async def subscribe(self, *_args, **kwargs):
             self.kwargs = kwargs

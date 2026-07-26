@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import json
 import os
+import uuid
 
 import lance
 import nats
@@ -11,7 +12,7 @@ import pytest
 
 from brain import main as brain_main
 from brain.strategies.moving_average import MovingAverageStrategy
-from core.nats_utils import ensure_stream
+from core.nats_utils import MARKET_STREAM_NAME, MARKET_STREAM_SUBJECT, ensure_stream
 from executor import main as executor_main
 from plutarch import archiver
 
@@ -40,6 +41,10 @@ async def test_observation_signal_and_archive_pipeline(monkeypatch, tmp_path):
     js = client.jetstream()
     archive_task: asyncio.Task | None = None
     subscriptions = []
+    suffix = uuid.uuid4().hex
+    market_subject = f"nephtys.stream.crypto.integration.{suffix}"
+    brain_durable = f"brain_integration_{suffix}"
+    plutarch_durable = f"plutarch_integration_{suffix}"
 
     brain_main._books.clear()
     brain_main._depth_bootstraps.clear()
@@ -51,12 +56,16 @@ async def test_observation_signal_and_archive_pipeline(monkeypatch, tmp_path):
         MovingAverageStrategy(window=3, buy_threshold=0.99, sell_threshold=1.01),
     )
     monkeypatch.setenv("EXECUTION_MODE", "observe")
+    monkeypatch.setattr(brain_main, "_BRAIN_SUBJECT", market_subject)
+    monkeypatch.setattr(brain_main, "_BRAIN_DURABLE_NAME", brain_durable)
 
     archive_path = tmp_path / "market_history_v2.lance"
     monkeypatch.setattr(archiver, "NATS_URL", NATS_URL)
     monkeypatch.setattr(archiver, "DATA_DIR", str(tmp_path))
     monkeypatch.setattr(archiver, "DATASET_PATH", str(archive_path))
     monkeypatch.setattr(archiver, "QUARANTINE_DIR", str(tmp_path / "quarantine"))
+    monkeypatch.setattr(archiver, "FILTER_SUBJECT", market_subject)
+    monkeypatch.setattr(archiver, "DURABLE_NAME", plutarch_durable)
     monkeypatch.setattr(archiver, "BATCH_SIZE", 1)
     monkeypatch.setattr(archiver, "FLUSH_INTERVAL_SEC", 0.2)
     monkeypatch.setattr(archiver, "ACK_WAIT_SEC", 2.0)
@@ -87,14 +96,14 @@ async def test_observation_signal_and_archive_pipeline(monkeypatch, tmp_path):
     try:
         await ensure_stream(
             js,
-            name="nephtys_crypto",
-            subjects=["nephtys.stream.crypto.*"],
+            name=MARKET_STREAM_NAME,
+            subjects=[MARKET_STREAM_SUBJECT],
         )
         await ensure_stream(js, name="trade_signals", subjects=["trade.*"])
         await js.create_key_value(bucket="mercury_wallet_state")
 
         archive_task = asyncio.create_task(archiver.run_archiver())
-        await _wait_for_consumer(js, "nephtys_crypto", archiver.DURABLE_NAME)
+        await _wait_for_consumer(js, MARKET_STREAM_NAME, plutarch_durable)
         subscriptions.append(await executor_main.subscribe_trade_signals(js))
         subscriptions.append(await brain_main.subscribe_market_events(js))
 
@@ -133,6 +142,9 @@ async def test_observation_signal_and_archive_pipeline(monkeypatch, tmp_path):
             archive_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await archive_task
+        for durable in (brain_durable, plutarch_durable):
+            with contextlib.suppress(Exception):
+                await js.delete_consumer(MARKET_STREAM_NAME, durable)
         with contextlib.suppress(Exception):
             await client.drain()
 
@@ -146,6 +158,9 @@ async def test_transient_brain_failure_is_redelivered(monkeypatch):
     subscription = None
     processed = asyncio.Event()
     attempts = 0
+    suffix = uuid.uuid4().hex
+    market_subject = f"nephtys.stream.crypto.integration.{suffix}"
+    brain_durable = f"brain_integration_{suffix}"
 
     async def fail_once(*_args):
         nonlocal attempts
@@ -156,12 +171,14 @@ async def test_transient_brain_failure_is_redelivered(monkeypatch):
 
     monkeypatch.setattr(brain_main, "handle_market_event", fail_once)
     monkeypatch.setattr(brain_main, "_RETRY_DELAY_SECONDS", 0.05)
+    monkeypatch.setattr(brain_main, "_BRAIN_SUBJECT", market_subject)
+    monkeypatch.setattr(brain_main, "_BRAIN_DURABLE_NAME", brain_durable)
 
     try:
         await ensure_stream(
             js,
-            name="nephtys_crypto",
-            subjects=["nephtys.stream.crypto.*"],
+            name=MARKET_STREAM_NAME,
+            subjects=[MARKET_STREAM_SUBJECT],
         )
         subscription = await brain_main.subscribe_market_events(js)
         envelope = {
@@ -183,6 +200,8 @@ async def test_transient_brain_failure_is_redelivered(monkeypatch):
         if subscription is not None:
             with contextlib.suppress(Exception):
                 await subscription.unsubscribe()
+        with contextlib.suppress(Exception):
+            await js.delete_consumer(MARKET_STREAM_NAME, brain_durable)
         with contextlib.suppress(Exception):
             await client.drain()
 

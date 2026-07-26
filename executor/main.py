@@ -9,7 +9,7 @@ from nats.js.api import ConsumerConfig
 from nats.js.errors import BucketNotFoundError
 from pydantic import ValidationError
 
-from core.nats_utils import connect_jetstream, ensure_stream
+from core.nats_utils import connect_jetstream, ensure_stream, validate_push_consumer
 from core.schemas import TradeSignal
 from executor.exchange_client import (
     build_persisted_position_state,
@@ -49,6 +49,7 @@ _EXECUTOR_HTTP_PORT = int(os.getenv("EXECUTOR_HTTP_PORT", "9109"))
 _EXECUTOR_ACCOUNT_REFRESH_SECONDS = float(os.getenv("EXECUTOR_ACCOUNT_REFRESH_SECONDS", "15"))
 _CONSUMER_MAX_DELIVER = int(os.getenv("MERCURY_CONSUMER_MAX_DELIVER", "10"))
 _RETRY_DELAY_SECONDS = float(os.getenv("MERCURY_CONSUMER_RETRY_DELAY_SECONDS", "5"))
+_EXECUTOR_DURABLE_NAME = os.getenv("EXECUTOR_DURABLE_NAME", "executor_service")
 
 
 def _record_trade_outcome(action: str, outcome: str) -> None:
@@ -337,9 +338,16 @@ async def main():
 
 async def subscribe_trade_signals(js):
     handler = await get_message_handler(js)
+    await validate_push_consumer(
+        js,
+        stream_name="trade_signals",
+        durable_name=_EXECUTOR_DURABLE_NAME,
+        filter_subject="trade.signals",
+        max_deliver=_CONSUMER_MAX_DELIVER,
+    )
     return await js.subscribe(
         "trade.signals",
-        durable="executor_service",
+        durable=_EXECUTOR_DURABLE_NAME,
         cb=handler,
         config=ConsumerConfig(max_deliver=_CONSUMER_MAX_DELIVER),
         manual_ack=True,

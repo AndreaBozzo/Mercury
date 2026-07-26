@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 from typing import Literal
 
 import pytest
+from nats.js.errors import NotFoundError
 
 from core.schemas import TradeSignal
 from executor.exchange_client import ExecutionResult, execute_trade
@@ -260,6 +261,9 @@ async def test_trade_subscription_disables_callback_auto_ack():
     class FakeJetStream:
         def __init__(self):
             self.kwargs = None
+
+        async def consumer_info(self, _stream, _durable):
+            raise NotFoundError()
 
         async def subscribe(self, *_args, **kwargs):
             self.kwargs = kwargs

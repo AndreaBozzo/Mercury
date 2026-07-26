@@ -25,7 +25,13 @@ from pydantic import ValidationError
 from brain.adapters.binance_depth import BinanceDepthBootstrapper, parse_binance_depth
 from brain.observability import health_http_status, health_payload, json_response, metrics_payload
 from brain.strategies import build_strategy_from_env
-from core.nats_utils import connect_jetstream, ensure_stream
+from core.nats_utils import (
+    MARKET_STREAM_NAME,
+    MARKET_STREAM_SUBJECT,
+    connect_jetstream,
+    ensure_stream,
+    validate_push_consumer,
+)
 from core.order_book import OrderBook
 from core.schemas import MarketEvent, OrderBookDelta, OrderBookSnapshot
 from core.symbols import normalize_symbol
@@ -42,6 +48,7 @@ _nats_client: NatsClient | None = None
 _BRAIN_HTTP_HOST = os.getenv("BRAIN_HTTP_HOST", "127.0.0.1")
 _BRAIN_HTTP_PORT = int(os.getenv("BRAIN_HTTP_PORT", "9108"))
 _BRAIN_SUBJECT = os.getenv("BRAIN_SUBJECT", "nephtys.stream.crypto.btc")
+_BRAIN_DURABLE_NAME = os.getenv("BRAIN_DURABLE_NAME", "brain_service")
 _CONSUMER_MAX_DELIVER = int(os.getenv("MERCURY_CONSUMER_MAX_DELIVER", "10"))
 _RETRY_DELAY_SECONDS = float(os.getenv("MERCURY_CONSUMER_RETRY_DELAY_SECONDS", "5"))
 
@@ -188,8 +195,8 @@ async def main() -> None:
     try:
         await ensure_stream(
             js,
-            name="nephtys_crypto",
-            subjects=["nephtys.stream.crypto.*"],
+            name=MARKET_STREAM_NAME,
+            subjects=[MARKET_STREAM_SUBJECT],
         )
 
         http_server = await asyncio.start_server(_serve_http, _BRAIN_HTTP_HOST, _BRAIN_HTTP_PORT)
@@ -227,9 +234,16 @@ def get_market_handler(js):
 
 
 async def subscribe_market_events(js):
+    await validate_push_consumer(
+        js,
+        stream_name=MARKET_STREAM_NAME,
+        durable_name=_BRAIN_DURABLE_NAME,
+        filter_subject=_BRAIN_SUBJECT,
+        max_deliver=_CONSUMER_MAX_DELIVER,
+    )
     return await js.subscribe(
         _BRAIN_SUBJECT,
-        durable="brain_service",
+        durable=_BRAIN_DURABLE_NAME,
         cb=get_market_handler(js),
         config=ConsumerConfig(max_deliver=_CONSUMER_MAX_DELIVER),
         manual_ack=True,

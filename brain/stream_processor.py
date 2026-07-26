@@ -69,8 +69,15 @@ from bytewax.inputs import DynamicSource, StatelessSourcePartition
 from bytewax.outputs import DynamicSink, StatelessSinkPartition
 from bytewax.run import cli_main
 from nats.js import JetStreamContext
+from nats.js.api import ConsumerConfig
 
-from core.nats_utils import NatsSession, ensure_stream
+from core.nats_utils import (
+    MARKET_STREAM_NAME,
+    MARKET_STREAM_SUBJECT,
+    NatsSession,
+    ensure_stream,
+    validate_push_consumer,
+)
 from core.schemas import INTENT_PLACEHOLDER_QTY, TradeSignal
 
 logger = logging.getLogger("stream_processor")
@@ -80,6 +87,8 @@ SUBJECT = os.getenv("BRAIN_SUBJECT", "nephtys.stream.crypto.btc")
 VWAP_WINDOW = int(os.getenv("VWAP_WINDOW", "50"))
 IMBALANCE_WINDOW = int(os.getenv("IMBALANCE_WINDOW", "20"))
 SIGNAL_THRESHOLD = float(os.getenv("SIGNAL_THRESHOLD", "0.01"))
+BRIDGE_DURABLE_NAME = os.getenv("BYTEWAX_DURABLE_NAME", "stream_processor")
+BRIDGE_CONSUMER_MAX_DELIVER = int(os.getenv("MERCURY_CONSUMER_MAX_DELIVER", "10"))
 
 # ---------------------------------------------------------------------------
 # NATS → Queue bridge
@@ -108,8 +117,8 @@ class _NatsBridge:
         try:
             await ensure_stream(
                 js,
-                name="nephtys_crypto",
-                subjects=["nephtys.stream.crypto.*"],
+                name=MARKET_STREAM_NAME,
+                subjects=[MARKET_STREAM_SUBJECT],
             )
 
             async def _handler(msg) -> None:
@@ -120,10 +129,18 @@ class _NatsBridge:
                     logger.warning("Bridge queue full — dropping message")
                     await msg.nak()
 
+            await validate_push_consumer(
+                js,
+                stream_name=MARKET_STREAM_NAME,
+                durable_name=BRIDGE_DURABLE_NAME,
+                filter_subject=self._subject,
+                max_deliver=BRIDGE_CONSUMER_MAX_DELIVER,
+            )
             await js.subscribe(
                 self._subject,
-                durable="stream_processor",
+                durable=BRIDGE_DURABLE_NAME,
                 cb=_handler,
+                config=ConsumerConfig(max_deliver=BRIDGE_CONSUMER_MAX_DELIVER),
                 manual_ack=True,
             )
             while True:

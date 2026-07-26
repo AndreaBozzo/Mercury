@@ -42,13 +42,16 @@ from nats.aio.client import Client as NatsClient
 from nats.js.api import ConsumerConfig
 from nats.js.errors import NotFoundError
 
+from core.nats_utils import MARKET_STREAM_NAME, MARKET_STREAM_SUBJECT
+
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("plutarch")
 
 NATS_URL = os.getenv("NATS_URL", "nats://localhost:4222")
-STREAM_NAME = os.getenv("PLUTARCH_STREAM_NAME", "nephtys_crypto")
-STREAM_SUBJECT = os.getenv("PLUTARCH_STREAM_SUBJECT", "nephtys.stream.crypto.*")
+STREAM_NAME = os.getenv("PLUTARCH_STREAM_NAME", MARKET_STREAM_NAME)
+STREAM_SUBJECT = os.getenv("PLUTARCH_STREAM_SUBJECT", MARKET_STREAM_SUBJECT)
+FILTER_SUBJECT = os.getenv("PLUTARCH_FILTER_SUBJECT", "nephtys.stream.crypto.*")
 DURABLE_NAME = os.getenv("PLUTARCH_DURABLE_NAME", "plutarch_archiver")
 DATA_DIR = os.getenv("PLUTARCH_DATA_DIR", "data/history")
 DATASET_NAME = os.getenv("PLUTARCH_DATASET_NAME", "market_history_v2.lance")
@@ -223,7 +226,12 @@ def flush_buffer_to_lance(rows: list[dict[str, Any]]) -> None:
 
 
 async def _ensure_stream(js: Any) -> None:
-    """Create the stream if absent and reject incompatible existing subjects."""
+    """Create the upstream stream if absent and validate the consumer filter."""
+    if not _stream_subject_covers(STREAM_SUBJECT, FILTER_SUBJECT):
+        raise ValueError(
+            f"Configured stream subject {STREAM_SUBJECT!r} does not cover "
+            f"Plutarch filter {FILTER_SUBJECT!r}"
+        )
     try:
         info = await js.stream_info(STREAM_NAME)
     except NotFoundError:
@@ -237,7 +245,14 @@ async def _ensure_stream(js: Any) -> None:
     ):
         raise RuntimeError(
             f"JetStream stream {STREAM_NAME!r} subjects {configured_subjects!r} "
-            f"do not cover Plutarch subject {STREAM_SUBJECT!r}"
+            f"do not cover configured stream subject {STREAM_SUBJECT!r}"
+        )
+    if not any(
+        _stream_subject_covers(configured, FILTER_SUBJECT) for configured in configured_subjects
+    ):
+        raise RuntimeError(
+            f"JetStream stream {STREAM_NAME!r} subjects {configured_subjects!r} "
+            f"do not cover Plutarch filter {FILTER_SUBJECT!r}"
         )
 
 
@@ -255,6 +270,54 @@ def _consumer_config() -> ConsumerConfig:
         ack_wait=ACK_WAIT_SEC,
         max_deliver=CONSUMER_MAX_DELIVER,
         max_ack_pending=CONSUMER_MAX_ACK_PENDING,
+        filter_subject=FILTER_SUBJECT,
+    )
+
+
+def _consumer_config_drift(actual: ConsumerConfig, expected: ConsumerConfig) -> list[str]:
+    """Describe correctness-relevant drift in an existing durable consumer."""
+    drift: list[str] = []
+    for field in ("ack_policy", "ack_wait", "max_deliver", "max_ack_pending", "filter_subject"):
+        actual_value = getattr(actual, field)
+        expected_value = getattr(expected, field)
+        if actual_value != expected_value:
+            drift.append(f"{field}={actual_value!r} (expected {expected_value!r})")
+
+    if actual.filter_subjects:
+        drift.append(f"filter_subjects={actual.filter_subjects!r} (expected none)")
+    if actual.backoff:
+        drift.append(f"backoff={actual.backoff!r} (expected none)")
+    if actual.deliver_subject is not None:
+        drift.append("delivery mode is push (expected pull)")
+    return drift
+
+
+async def _open_consumer(js: Any) -> Any:
+    """Create or bind the durable only when its persisted config is compatible."""
+    desired = _consumer_config()
+    try:
+        info = await js.consumer_info(STREAM_NAME, DURABLE_NAME)
+    except NotFoundError:
+        return await js.pull_subscribe(
+            FILTER_SUBJECT,
+            durable=DURABLE_NAME,
+            stream=STREAM_NAME,
+            config=desired,
+        )
+
+    drift = _consumer_config_drift(info.config, desired)
+    if drift:
+        details = "; ".join(drift)
+        raise RuntimeError(
+            f"JetStream consumer {DURABLE_NAME!r} on stream {STREAM_NAME!r} has "
+            f"incompatible persisted configuration: {details}. Migrate or recreate "
+            "the durable deliberately before restarting Plutarch."
+        )
+    return await js.pull_subscribe(
+        FILTER_SUBJECT,
+        durable=DURABLE_NAME,
+        stream=STREAM_NAME,
+        config=desired,
     )
 
 
@@ -335,20 +398,17 @@ async def run_archiver() -> None:
         js = nc.jetstream()
 
         logger.info(
-            "Plutarch connected to NATS at %s. Stream=%s subject=%s",
+            "Plutarch connected to NATS at %s. Stream=%s stream_subject=%s filter=%s",
             NATS_URL,
             STREAM_NAME,
             STREAM_SUBJECT,
+            FILTER_SUBJECT,
         )
 
         await _ensure_stream(js)
 
         # Pull consumer gives us backpressure for free: no fetch -> no delivery.
-        sub = await js.pull_subscribe(
-            STREAM_SUBJECT,
-            durable=DURABLE_NAME,
-            config=_consumer_config(),
-        )
+        sub = await _open_consumer(js)
         last_flush_monotonic = time.monotonic()
 
         while True:

@@ -1,9 +1,10 @@
 from types import SimpleNamespace
 
 import pytest
+from nats.js.api import AckPolicy, ConsumerConfig
 from nats.js.errors import NotFoundError
 
-from core.nats_utils import NatsSession, ensure_stream
+from core.nats_utils import NatsSession, ensure_stream, validate_push_consumer
 
 
 class FakeClient:
@@ -95,4 +96,42 @@ async def test_ensure_stream_propagates_broker_failures():
             js,
             name="market",
             subjects=["nephtys.stream.crypto.*"],
+        )
+
+
+@pytest.mark.asyncio
+async def test_validate_push_consumer_accepts_missing_durable():
+    class MissingConsumerJetStream:
+        async def consumer_info(self, _stream, _durable):
+            raise NotFoundError()
+
+    await validate_push_consumer(
+        MissingConsumerJetStream(),
+        stream_name="market",
+        durable_name="brain",
+        filter_subject="market.btc",
+        max_deliver=10,
+    )
+
+
+@pytest.mark.asyncio
+async def test_validate_push_consumer_rejects_filter_drift():
+    config = ConsumerConfig(
+        ack_policy=AckPolicy.EXPLICIT,
+        max_deliver=10,
+        filter_subject="market.eth",
+        deliver_subject="_INBOX.persisted",
+    )
+
+    class DriftedConsumerJetStream:
+        async def consumer_info(self, _stream, _durable):
+            return SimpleNamespace(config=config)
+
+    with pytest.raises(RuntimeError, match=r"incompatible persisted configuration.*filter_subject"):
+        await validate_push_consumer(
+            DriftedConsumerJetStream(),
+            stream_name="market",
+            durable_name="brain",
+            filter_subject="market.btc",
+            max_deliver=10,
         )

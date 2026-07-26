@@ -3,6 +3,7 @@ import queue
 from types import SimpleNamespace
 
 import pytest
+from nats.js.errors import NotFoundError
 
 from brain.stream_processor import _NatsBridge
 
@@ -13,7 +14,10 @@ async def test_bridge_subscription_owns_ack_and_connection(monkeypatch):
 
     class FakeJetStream:
         async def stream_info(self, _name):
-            return SimpleNamespace(config=SimpleNamespace(subjects=["nephtys.stream.crypto.*"]))
+            return SimpleNamespace(config=SimpleNamespace(subjects=["nephtys.stream.>"]))
+
+        async def consumer_info(self, _stream, _durable):
+            raise NotFoundError()
 
         async def subscribe(self, subject, **kwargs):
             calls["subject"] = subject
@@ -57,4 +61,5 @@ async def test_bridge_subscription_owns_ack_and_connection(monkeypatch):
 
     assert calls["subject"] == "nephtys.stream.crypto.btc"
     assert calls["subscribe"]["manual_ack"] is True
+    assert calls["subscribe"]["config"].max_deliver == 10
     assert client.drained is True
