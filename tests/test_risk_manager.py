@@ -1,3 +1,4 @@
+import time
 from datetime import UTC, datetime
 
 import pytest
@@ -156,13 +157,14 @@ async def test_record_trade_execution_reduces_exposure_for_sell_orders():
 
 @pytest.mark.asyncio
 async def test_check_risk_applies_per_trade_cap_to_sells():
+    updated_at = int(time.time())
     kv = FakeKV(
         {
             EXPOSURE_KEY: b"500",
             RISK_LIMITS_KEY: (
-                b'{"max_exposure_dollars": 1000, "max_trade_notional_dollars": 200, '
-                b'"sentiment_score": 0}'
-            ),
+                f'{{"max_exposure_dollars": 1000, "max_trade_notional_dollars": 200, '
+                f'"sentiment_score": 0, "updated_at": {updated_at}}}'
+            ).encode(),
         }
     )
     sell_signal = make_signal().model_copy(update={"action": "SELL"})
@@ -214,13 +216,15 @@ async def test_load_position_states_does_not_hide_transport_failure():
 
 @pytest.mark.asyncio
 async def test_check_risk_uses_dynamic_kv_limits_for_buys():
+    updated_at = int(time.time())
     kv = FakeKV(
         {
             EXPOSURE_KEY: b"100",
             RISK_LIMITS_KEY: (
-                b'{"max_exposure_dollars": 400, "max_trade_notional_dollars": 200, '
-                b'"sentiment_score": -0.6, "source": "test", "rationale": "bad news"}'
-            ),
+                f'{{"max_exposure_dollars": 400, "max_trade_notional_dollars": 200, '
+                f'"sentiment_score": -0.6, "source": "test", '
+                f'"rationale": "bad news", "updated_at": {updated_at}}}'
+            ).encode(),
         }
     )
     js = FakeJetStream(kv)
@@ -251,6 +255,43 @@ async def test_save_and_load_risk_limits_round_trip():
     assert limits["max_exposure_dollars"] == DEFAULT_MAX_EXPOSURE_DOLLARS / 2
     assert limits["max_trade_notional_dollars"] == DEFAULT_MAX_TRADE_NOTIONAL_DOLLARS / 2
     assert limits["source"] == "llm"
+    assert isinstance(limits["updated_at"], int)
+
+
+@pytest.mark.asyncio
+async def test_load_risk_limits_fails_closed_when_dynamic_state_is_stale(monkeypatch):
+    monkeypatch.setattr("executor.risk_manager.time.time", lambda: 10_000.0)
+    js = FakeJetStream(
+        FakeKV(
+            {
+                RISK_LIMITS_KEY: (
+                    b'{"max_exposure_dollars": 400, "max_trade_notional_dollars": 200, '
+                    b'"sentiment_score": 0, "source": "test", "updated_at": 9000}'
+                )
+            }
+        )
+    )
+
+    with pytest.raises(RiskStateUnavailable, match="risk limits"):
+        await load_risk_limits(js)
+
+
+@pytest.mark.asyncio
+async def test_load_risk_limits_rejects_implausible_future_timestamp(monkeypatch):
+    monkeypatch.setattr("executor.risk_manager.time.time", lambda: 10_000.0)
+    js = FakeJetStream(
+        FakeKV(
+            {
+                RISK_LIMITS_KEY: (
+                    b'{"max_exposure_dollars": 400, "max_trade_notional_dollars": 200, '
+                    b'"sentiment_score": 0, "source": "test", "updated_at": 10031}'
+                )
+            }
+        )
+    )
+
+    with pytest.raises(RiskStateUnavailable, match="risk limits"):
+        await load_risk_limits(js)
 
 
 @pytest.mark.asyncio

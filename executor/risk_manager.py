@@ -1,4 +1,5 @@
 import logging
+import time
 from collections.abc import Mapping
 from json import dumps, loads
 from math import isfinite
@@ -20,6 +21,14 @@ DEFAULT_MAX_EXPOSURE_DOLLARS = env_positive_float(
 DEFAULT_MAX_TRADE_NOTIONAL_DOLLARS = env_positive_float(
     "MAX_TRADE_NOTIONAL_DOLLARS",
     1000.0,
+)
+RISK_LIMIT_MAX_AGE_SECONDS = env_positive_float(
+    "RISK_LIMIT_MAX_AGE_SECONDS",
+    900.0,
+)
+RISK_LIMIT_FUTURE_SKEW_SECONDS = env_positive_float(
+    "RISK_LIMIT_FUTURE_SKEW_SECONDS",
+    30.0,
 )
 KV_BUCKET = "mercury_wallet_state"
 EXPOSURE_KEY = "current_exposure"
@@ -77,7 +86,9 @@ async def load_risk_limits(js: JetStreamContext) -> dict[str, float | int | str]
         raw = loads(entry.value.decode())
         if not isinstance(raw, dict):
             raise ValueError("risk limits must be a JSON object")
-        return _coerce_risk_limits(raw)
+        limits = _coerce_risk_limits(raw)
+        _validate_risk_limit_freshness(limits)
+        return limits
     except _MISSING_KEY_ERRORS:
         return default_risk_limits()
     except Exception as exc:
@@ -89,7 +100,12 @@ async def save_risk_limits(
     limits: Mapping[str, float | int | str | None],
 ) -> None:
     kv = await js.key_value(KV_BUCKET)
-    await kv.put(RISK_LIMITS_KEY, dumps(_coerce_risk_limits(limits), sort_keys=True).encode())
+    timestamped_limits = dict(limits)
+    timestamped_limits.setdefault("updated_at", int(time.time()))
+    await kv.put(
+        RISK_LIMITS_KEY,
+        dumps(_coerce_risk_limits(timestamped_limits), sort_keys=True).encode(),
+    )
 
 
 async def load_position_states(
@@ -278,6 +294,7 @@ def _coerce_risk_limits(
     )
     source = str(raw.get("source") or defaults["source"])
     rationale = str(raw.get("rationale") or defaults["rationale"])
+    updated_at = _non_negative_int(raw.get("updated_at"), field="updated_at")
 
     return {
         "max_exposure_dollars": max_exposure,
@@ -285,7 +302,23 @@ def _coerce_risk_limits(
         "sentiment_score": sentiment_score,
         "source": source,
         "rationale": rationale,
+        "updated_at": updated_at,
     }
+
+
+def _validate_risk_limit_freshness(limits: Mapping[str, float | int | str]) -> None:
+    updated_at = int(limits["updated_at"])
+    age_seconds = time.time() - updated_at
+    if age_seconds > RISK_LIMIT_MAX_AGE_SECONDS:
+        raise ValueError(
+            f"risk limits are stale by {age_seconds:.0f}s "
+            f"(maximum {RISK_LIMIT_MAX_AGE_SECONDS:.0f}s)"
+        )
+    if age_seconds < -RISK_LIMIT_FUTURE_SKEW_SECONDS:
+        raise ValueError(
+            f"risk limits are {-age_seconds:.0f}s in the future "
+            f"(maximum skew {RISK_LIMIT_FUTURE_SKEW_SECONDS:.0f}s)"
+        )
 
 
 def _positive_float(value: float | int | str | None, field: str) -> float:
@@ -315,3 +348,13 @@ def _bounded_float(
     if not isfinite(parsed):
         raise ValueError(f"{field} must be a finite number")
     return max(minimum, min(maximum, parsed))
+
+
+def _non_negative_int(value: float | int | str | None, field: str) -> int:
+    try:
+        parsed_float = float(value) if value is not None and not isinstance(value, bool) else -1.0
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{field} must be a non-negative integer") from exc
+    if not isfinite(parsed_float) or parsed_float < 0 or not parsed_float.is_integer():
+        raise ValueError(f"{field} must be a non-negative integer")
+    return int(parsed_float)
