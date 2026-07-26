@@ -11,6 +11,7 @@ def health_payload(
     bootstrap_active: Mapping[str, bool],
     *,
     order_books_required: bool = True,
+    nats_connected: bool = True,
 ) -> dict:
     symbols: dict[str, dict] = {}
     ready_count = 0
@@ -30,7 +31,9 @@ def health_payload(
             "seq": seq,
         }
 
-    if not order_books_required:
+    if not nats_connected:
+        status = "unavailable"
+    elif not order_books_required:
         status = "ok"
     elif not symbols:
         status = "starting"
@@ -43,6 +46,7 @@ def health_payload(
 
     return {
         "status": status,
+        "nats_connected": nats_connected,
         "order_books_required": order_books_required,
         "books_ready": ready_count,
         "books_total": len(symbols),
@@ -62,6 +66,8 @@ def metrics_payload(
     bootstrap_active: Mapping[str, bool],
     signal_counts: Mapping[tuple[str, str], int] | None = None,
     book_gap_counts: Mapping[str, int] | None = None,
+    *,
+    nats_connected: bool = True,
 ) -> str:
     signal_counts = signal_counts or {}
     book_gap_counts = book_gap_counts or {}
@@ -77,6 +83,9 @@ def metrics_payload(
         "# TYPE mercury_signals_emitted_total counter",
         "# HELP mercury_book_gap_total Total order-book sequence gap events seen by the brain.",
         "# TYPE mercury_book_gap_total counter",
+        "# HELP mercury_brain_nats_connected 1 while the NATS client is connected.",
+        "# TYPE mercury_brain_nats_connected gauge",
+        f"mercury_brain_nats_connected {1 if nats_connected else 0}",
     ]
 
     for symbol in sorted(set(books) | set(bootstrap_active) | set(book_gap_counts)):

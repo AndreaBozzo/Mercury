@@ -4,18 +4,32 @@ import json
 from collections.abc import Mapping
 
 
-def health_payload(current_exposure: float, position_pnl: float) -> dict:
+def health_payload(
+    current_exposure: float,
+    position_pnl: float,
+    *,
+    nats_connected: bool = True,
+) -> dict:
     return {
-        "status": "ok",
+        "status": "ok" if nats_connected else "unavailable",
+        "nats_connected": nats_connected,
         "current_exposure": current_exposure,
         "position_pnl": position_pnl,
     }
+
+
+def health_http_status(payload: Mapping[str, object]) -> str:
+    if payload.get("status") == "ok":
+        return "200 OK"
+    return "503 Service Unavailable"
 
 
 def metrics_payload(
     trade_counts: Mapping[tuple[str, str], int],
     current_exposure: float,
     position_pnl: float,
+    *,
+    nats_connected: bool = True,
 ) -> str:
     lines = [
         "# HELP mercury_trades_executed_total "
@@ -26,6 +40,9 @@ def metrics_payload(
         "# TYPE mercury_executor_current_exposure_dollars gauge",
         "# HELP mercury_position_pnl_dollars Current tracked position P&L in dollars.",
         "# TYPE mercury_position_pnl_dollars gauge",
+        "# HELP mercury_executor_nats_connected 1 while the NATS client is connected.",
+        "# TYPE mercury_executor_nats_connected gauge",
+        f"mercury_executor_nats_connected {1 if nats_connected else 0}",
     ]
 
     for (action, outcome), count in sorted(trade_counts.items()):

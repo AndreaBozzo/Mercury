@@ -47,7 +47,7 @@ regressions, not proof of trading safety.
 
 | Check | Result on 2026-07-26 |
 |---|---|
-| Unit/component tests | 247 passed; 2 external-service tests skipped without a broker |
+| Unit/component tests | 251 passed; 2 external-service tests skipped without a broker |
 | Real JetStream integration | 2 passed against pinned NATS 2.14.3 |
 | Runtime-only branch-aware coverage | 71% overall |
 | Lowest runtime-module coverage | Bytewax 32%, provisioning 35%, Ray runner 36%, Brain entrypoint 52% |
@@ -117,6 +117,7 @@ This section records engineering constraints and primary-source context; it is n
 - Explicit ACK/NAK/TERM consumers disable callback auto-ack, bound transient delivery attempts,
   and terminate structurally malformed events.
 - Supported services validate existing stream subjects and own/drain their NATS connections.
+- Service readiness and metrics expose the live NATS client state and fail during a disconnect.
 
 ### Archive behavior
 
@@ -215,7 +216,7 @@ an edge.
 | OP-01 | High | There was no selected open-source licence. | Public source remained normally copyrighted and contribution terms were unclear. | **Resolved:** Mercury is licensed under Apache-2.0 with an owner attribution in `NOTICE`; contribution terms use the same licence. |
 | OP-02 | Medium | Security, contribution, conduct, and support policies were absent. | Vulnerability reports and contribution expectations had no defined path. | **Resolved in source:** policies and a PR template are present. The owner must enable GitHub private vulnerability reporting before publication. |
 | OP-03 | High | Compose used mutable images and root containers. | Builds could drift; a compromise had unnecessarily broad container permissions. | **Resolved in configuration:** digest-pinned bases, fixed non-root UID, read-only roots, dropped capabilities, no-new-privileges, and reduced build contexts. |
-| OP-04 | Medium | Compose lacked complete health/dependency readiness and service exposure. | Startup order did not mean NATS was usable; Brain/Executor health was not mapped. | **Resolved in configuration:** health-based dependencies, strategy-aware Brain readiness, service health checks, restarts, and loopback-only ports. |
+| OP-04 | Medium | Compose lacked complete health/dependency readiness and service exposure. | Startup order did not mean NATS was usable; Brain/Executor health was not mapped. | **Resolved in configuration:** NATS-aware service health, strategy-aware Brain readiness, health-based dependencies, restarts, and loopback-only ports. |
 | OP-05 | High | NATS has no authentication/TLS in the sample deployment. | Exposing the sample beyond loopback would expose events, risk state, and control subjects. | **Contained for alpha:** every host port binds loopback and documentation says local-only. A secured remote profile remains future work. |
 | OP-06 | Medium | NATS connection ownership/cleanup was unclear. | Services received JetStream contexts without consistently closing their client. | **Resolved during review:** supported services and the Bytewax bridge own and drain sessions. |
 | OP-07 | Medium | Mypy checked only typed function bodies. | Untyped legacy paths could escape analysis while CI appeared fully type-checked. | **Resolved during review:** `check_untyped_defs` is enabled for all runtime packages and provisioning. |

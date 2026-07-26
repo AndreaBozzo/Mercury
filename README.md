@@ -126,6 +126,9 @@ Requirements:
    - Executor: `http://127.0.0.1:9109/health` and `/metrics`
    - Plutarch: `http://127.0.0.1:9110/healthz` and `/metrics`
 
+Application health fails readiness while its NATS client is disconnected. Brain also reports
+whether the selected strategy requires a ready L2 order book.
+
 The first moving-average signal appears only after its rolling window is populated. In observation
 mode that signal is risk-checked and marked `observed`; it is never sent to an exchange.
 

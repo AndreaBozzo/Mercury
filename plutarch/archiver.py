@@ -38,6 +38,7 @@ import lance
 import nats
 import pyarrow as pa
 from dotenv import load_dotenv
+from nats.aio.client import Client as NatsClient
 from nats.js.api import ConsumerConfig
 from nats.js.errors import NotFoundError
 
@@ -94,6 +95,7 @@ _state: dict[str, Any] = {
     "redelivered_messages": 0,
     "started_at_ns": time.time_ns(),
 }
+_nats_client: NatsClient | None = None
 
 
 def _row_from_envelope(
@@ -321,32 +323,34 @@ async def _flush_with_quarantine_and_ack(
 
 
 async def run_archiver() -> None:
+    global _nats_client
     Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
 
     nc = await nats.connect(servers=[NATS_URL])
-    js = nc.jetstream()
-
-    logger.info(
-        "Plutarch connected to NATS at %s. Stream=%s subject=%s",
-        NATS_URL,
-        STREAM_NAME,
-        STREAM_SUBJECT,
-    )
-
-    await _ensure_stream(js)
-
-    # Pull consumer gives us backpressure for free: no fetch -> no delivery.
-    sub = await js.pull_subscribe(
-        STREAM_SUBJECT,
-        durable=DURABLE_NAME,
-        config=_consumer_config(),
-    )
-
+    _nats_client = nc
     pending_rows: list[dict[str, Any]] = []
     pending_msgs: list[Any] = []
-    last_flush_monotonic = time.monotonic()
 
     try:
+        js = nc.jetstream()
+
+        logger.info(
+            "Plutarch connected to NATS at %s. Stream=%s subject=%s",
+            NATS_URL,
+            STREAM_NAME,
+            STREAM_SUBJECT,
+        )
+
+        await _ensure_stream(js)
+
+        # Pull consumer gives us backpressure for free: no fetch -> no delivery.
+        sub = await js.pull_subscribe(
+            STREAM_SUBJECT,
+            durable=DURABLE_NAME,
+            config=_consumer_config(),
+        )
+        last_flush_monotonic = time.monotonic()
+
         while True:
             try:
                 msgs = await sub.fetch(batch=BATCH_SIZE, timeout=FLUSH_INTERVAL_SEC)
@@ -383,7 +387,10 @@ async def run_archiver() -> None:
         await _flush_with_quarantine_and_ack(pending_rows, pending_msgs)
         raise
     finally:
-        await nc.close()
+        try:
+            await nc.close()
+        finally:
+            _nats_client = None
 
 
 # ---------------------------------------------------------------------------
@@ -391,7 +398,13 @@ async def run_archiver() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _healthz_body() -> bytes:
+def _is_nats_connected() -> bool:
+    return bool(_nats_client and _nats_client.is_connected)
+
+
+def _healthz_body(*, nats_connected: bool | None = None) -> bytes:
+    if nats_connected is None:
+        nats_connected = _is_nats_connected()
     now_ns = time.time_ns()
     last_flush_ns = _state["last_flush_ns"]
     last_flush_age_seconds = (now_ns - last_flush_ns) / 1e9 if last_flush_ns else None
@@ -403,10 +416,17 @@ def _healthz_body() -> bytes:
     )
 
     # This works before the first successful flush as well as after it.
-    healthy = buffer_age_seconds is None or buffer_age_seconds < 3 * FLUSH_INTERVAL_SEC
+    buffer_healthy = buffer_age_seconds is None or buffer_age_seconds < 3 * FLUSH_INTERVAL_SEC
+    if not nats_connected:
+        status = "unavailable"
+    elif not buffer_healthy:
+        status = "stalled"
+    else:
+        status = "ok"
 
     payload = {
-        "status": "ok" if healthy else "stalled",
+        "status": status,
+        "nats_connected": nats_connected,
         "events_written": _state["events_written"],
         "write_errors": _state["write_errors"],
         "quarantine_writes": _state["quarantine_writes"],
@@ -420,7 +440,9 @@ def _healthz_body() -> bytes:
     return json.dumps(payload).encode()
 
 
-def _metrics_body() -> bytes:
+def _metrics_body(*, nats_connected: bool | None = None) -> bytes:
+    if nats_connected is None:
+        nats_connected = _is_nats_connected()
     now_ns = time.time_ns()
     buffer_started_ns = _state["buffer_started_ns"]
     buffer_age_seconds = (
@@ -437,6 +459,7 @@ def _metrics_body() -> bytes:
         f"plutarch_buffer_depth {_state['buffer_depth']}",
         f"plutarch_buffer_oldest_age_seconds {buffer_age_seconds}",
         f"plutarch_last_flush_duration_seconds {_state['last_flush_duration_seconds']}",
+        f"plutarch_nats_connected {1 if nats_connected else 0}",
     ]
     return ("\n".join(lines) + "\n").encode()
 

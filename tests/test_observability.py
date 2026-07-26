@@ -12,6 +12,7 @@ def test_health_payload_reports_ready_and_bootstrap_state():
     )
 
     assert payload["status"] == "degraded"
+    assert payload["nats_connected"] is True
     assert payload["order_books_required"] is True
     assert payload["books_ready"] == 1
     assert payload["books_total"] == 2
@@ -24,6 +25,7 @@ def test_l1_health_is_ready_without_an_order_book():
 
     assert payload == {
         "status": "ok",
+        "nats_connected": True,
         "order_books_required": False,
         "books_ready": 0,
         "books_total": 0,
@@ -39,6 +41,14 @@ def test_unready_l2_health_returns_service_unavailable():
     assert health_http_status(payload) == "503 Service Unavailable"
 
 
+def test_disconnected_brain_health_returns_service_unavailable():
+    payload = health_payload({}, {}, order_books_required=False, nats_connected=False)
+
+    assert payload["status"] == "unavailable"
+    assert payload["nats_connected"] is False
+    assert health_http_status(payload) == "503 Service Unavailable"
+
+
 def test_metrics_payload_contains_prometheus_gauges():
     ready_book = OrderBook("BTC/USDT")
     ready_book.apply_snapshot([[100.0, 1.0]], [[101.0, 1.0]], seq=42)
@@ -48,6 +58,7 @@ def test_metrics_payload_contains_prometheus_gauges():
         bootstrap_active={"BTC/USDT": False, "ETH/USDT": True},
         signal_counts={("BUY", "BTC/USDT"): 3},
         book_gap_counts={"BTC/USDT": 2},
+        nats_connected=True,
     )
 
     assert 'mercury_brain_order_book_ready{symbol="BTC/USDT"} 1' in payload
@@ -55,3 +66,4 @@ def test_metrics_payload_contains_prometheus_gauges():
     assert 'mercury_brain_order_book_bootstrapping{symbol="ETH/USDT"} 1' in payload
     assert 'mercury_signals_emitted_total{action="BUY",symbol="BTC/USDT"} 3' in payload
     assert 'mercury_book_gap_total{symbol="BTC/USDT"} 2' in payload
+    assert "mercury_brain_nats_connected 1" in payload

@@ -18,6 +18,7 @@ import asyncio
 import logging
 import os
 
+from nats.aio.client import Client as NatsClient
 from nats.js.api import ConsumerConfig
 from pydantic import ValidationError
 
@@ -37,6 +38,7 @@ _depth_bootstraps: dict[str, BinanceDepthBootstrapper] = {}
 _signal_counts: dict[tuple[str, str], int] = {}
 _book_gap_counts: dict[str, int] = {}
 _strategy = build_strategy_from_env()
+_nats_client: NatsClient | None = None
 _BRAIN_HTTP_HOST = os.getenv("BRAIN_HTTP_HOST", "127.0.0.1")
 _BRAIN_HTTP_PORT = int(os.getenv("BRAIN_HTTP_PORT", "9108"))
 _BRAIN_SUBJECT = os.getenv("BRAIN_SUBJECT", "nephtys.stream.crypto.btc")
@@ -58,6 +60,10 @@ def _depth_bootstrap(symbol: str) -> BinanceDepthBootstrapper:
 
 def _bootstrap_state() -> dict[str, bool]:
     return {symbol: bootstrap.is_active for symbol, bootstrap in _depth_bootstraps.items()}
+
+
+def _is_nats_connected() -> bool:
+    return bool(_nats_client and _nats_client.is_connected)
 
 
 def _record_signal_emitted(action: str, symbol: str) -> None:
@@ -131,6 +137,7 @@ async def _serve_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                 _books,
                 bootstrap_state,
                 order_books_required=getattr(_strategy, "requires_order_book", True),
+                nats_connected=_is_nats_connected(),
             )
             body = json_response(payload)
             await _write_response(writer, health_http_status(payload), "application/json", body)
@@ -142,6 +149,7 @@ async def _serve_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
                 bootstrap_state,
                 signal_counts=_signal_counts,
                 book_gap_counts=_book_gap_counts,
+                nats_connected=_is_nats_connected(),
             ).encode()
             await _write_response(writer, "200 OK", "text/plain; version=0.0.4", body)
             return
@@ -171,7 +179,9 @@ async def _write_response(
 
 
 async def main() -> None:
+    global _nats_client
     session = await connect_jetstream()
+    _nats_client = session.client
     js = session.js
     logger.info("Brain service started.")
 
@@ -194,7 +204,10 @@ async def main() -> None:
         async with http_server:
             await http_server.serve_forever()
     finally:
-        await session.close()
+        try:
+            await session.close()
+        finally:
+            _nats_client = None
 
 
 def get_market_handler(js):

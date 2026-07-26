@@ -33,6 +33,7 @@ def _isolate_state(tmp_path, monkeypatch):
     monkeypatch.setattr(archiver, "DATASET_PATH", str(tmp_path / "test.lance"))
     monkeypatch.setattr(archiver, "DATA_DIR", str(tmp_path))
     monkeypatch.setattr(archiver, "QUARANTINE_DIR", str(tmp_path / "quarantine"))
+    monkeypatch.setattr(archiver, "_nats_client", None)
 
     # Reset runtime counters
     archiver._state.update(
@@ -295,12 +296,14 @@ def test_health_detects_stalled_buffer_before_first_flush(monkeypatch):
         last_flush_ns=0,
     )
 
-    payload = json.loads(archiver._healthz_body())
+    payload = json.loads(archiver._healthz_body(nats_connected=True))
 
     assert payload["status"] == "stalled"
     assert payload["last_flush_age_seconds"] is None
     assert payload["buffer_age_seconds"] >= 31.0
-    assert "plutarch_buffer_oldest_age_seconds" in archiver._metrics_body().decode()
+    assert (
+        "plutarch_buffer_oldest_age_seconds" in archiver._metrics_body(nats_connected=True).decode()
+    )
 
 
 def test_health_accepts_fresh_buffer_before_first_flush(monkeypatch):
@@ -313,9 +316,54 @@ def test_health_accepts_fresh_buffer_before_first_flush(monkeypatch):
         last_flush_ns=0,
     )
 
-    payload = json.loads(archiver._healthz_body())
+    payload = json.loads(archiver._healthz_body(nats_connected=True))
 
     assert payload["status"] == "ok"
+
+
+def test_health_reports_nats_disconnect():
+    from plutarch import archiver
+
+    payload = json.loads(archiver._healthz_body(nats_connected=False))
+
+    assert payload["status"] == "unavailable"
+    assert payload["nats_connected"] is False
+    assert "plutarch_nats_connected 0" in archiver._metrics_body(nats_connected=False).decode()
+
+
+@pytest.mark.asyncio
+async def test_run_archiver_closes_connection_when_setup_fails(monkeypatch):
+    from plutarch import archiver
+
+    class FakeClient:
+        is_connected = True
+
+        def __init__(self):
+            self.close_count = 0
+
+        def jetstream(self):
+            return object()
+
+        async def close(self):
+            self.close_count += 1
+            self.is_connected = False
+
+    client = FakeClient()
+
+    async def fake_connect(**_kwargs):
+        return client
+
+    async def fail_setup(_js):
+        raise PermissionError("stream denied")
+
+    monkeypatch.setattr(archiver.nats, "connect", fake_connect)
+    monkeypatch.setattr(archiver, "_ensure_stream", fail_setup)
+
+    with pytest.raises(PermissionError, match="stream denied"):
+        await archiver.run_archiver()
+
+    assert client.close_count == 1
+    assert archiver._nats_client is None
 
 
 @pytest.mark.asyncio

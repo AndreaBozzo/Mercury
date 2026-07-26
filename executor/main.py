@@ -4,6 +4,7 @@ import logging
 import os
 from datetime import UTC, datetime
 
+from nats.aio.client import Client as NatsClient
 from nats.js.api import ConsumerConfig
 from nats.js.errors import BucketNotFoundError
 from pydantic import ValidationError
@@ -19,7 +20,12 @@ from executor.exchange_client import (
     get_reconcile_symbols,
     is_observe_mode_enabled,
 )
-from executor.observability import health_payload, json_response, metrics_payload
+from executor.observability import (
+    health_http_status,
+    health_payload,
+    json_response,
+    metrics_payload,
+)
 from executor.risk_manager import (
     check_risk,
     load_exposure,
@@ -37,6 +43,7 @@ logger = logging.getLogger("executor")
 _trade_counts: dict[tuple[str, str], int] = {}
 _current_exposure = 0.0
 _position_pnl = 0.0
+_nats_client: NatsClient | None = None
 _EXECUTOR_HTTP_HOST = os.getenv("EXECUTOR_HTTP_HOST", "127.0.0.1")
 _EXECUTOR_HTTP_PORT = int(os.getenv("EXECUTOR_HTTP_PORT", "9109"))
 _EXECUTOR_ACCOUNT_REFRESH_SECONDS = float(os.getenv("EXECUTOR_ACCOUNT_REFRESH_SECONDS", "15"))
@@ -57,6 +64,10 @@ def _set_current_exposure(value: float) -> None:
 def _set_position_pnl(value: float) -> None:
     global _position_pnl
     _position_pnl = value
+
+
+def _is_nats_connected() -> bool:
+    return bool(_nats_client and _nats_client.is_connected)
 
 
 async def _refresh_current_exposure(js) -> None:
@@ -131,12 +142,22 @@ async def _serve_http(reader: asyncio.StreamReader, writer: asyncio.StreamWriter
             return
 
         if path == "/health":
-            body = json_response(health_payload(_current_exposure, _position_pnl))
-            await _write_response(writer, "200 OK", "application/json", body)
+            payload = health_payload(
+                _current_exposure,
+                _position_pnl,
+                nats_connected=_is_nats_connected(),
+            )
+            body = json_response(payload)
+            await _write_response(writer, health_http_status(payload), "application/json", body)
             return
 
         if path == "/metrics":
-            body = metrics_payload(_trade_counts, _current_exposure, _position_pnl).encode()
+            body = metrics_payload(
+                _trade_counts,
+                _current_exposure,
+                _position_pnl,
+                nats_connected=_is_nats_connected(),
+            ).encode()
             await _write_response(writer, "200 OK", "text/plain; version=0.0.4", body)
             return
 
@@ -269,8 +290,10 @@ async def get_message_handler(js):
 
 
 async def main():
+    global _nats_client
     execution_mode = ensure_execution_mode_supported()
     session = await connect_jetstream()
+    _nats_client = session.client
     js = session.js
     logger.info(
         "Executor service started in %s mode. Listening for trade signals...",
@@ -306,7 +329,10 @@ async def main():
             with contextlib.suppress(asyncio.CancelledError):
                 await refresh_task
     finally:
-        await session.close()
+        try:
+            await session.close()
+        finally:
+            _nats_client = None
 
 
 async def subscribe_trade_signals(js):
