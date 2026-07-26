@@ -2,7 +2,7 @@
 
 - **Status:** release candidate; not yet tagged or published
 - **Evidence date:** 2026-07-26
-- **Mercury runtime revision:** `ef6c6b5`
+- **Mercury runtime revision:** `c81b965`
 - **Nephtys revision:** `485ecbb7beb7f0d46d58744941f21bcb981beef8`
 - **Broker:** NATS 2.14.3 with JetStream
 - **Envelope contract:** [NME/1](NEPHTYS_COMPATIBILITY.md)
@@ -19,7 +19,7 @@ in this release is trading, legal, or investment advice.
 
 ## Verification record
 
-- The portable source gate passed with Ruff, formatting, mypy over 31 source files, 257
+- The portable source gate passed with Ruff, formatting, mypy over 31 source files, 258
   unit/component tests, a locked-dependency audit with no known advisories, and successful source
   and wheel builds.
 - The two real-JetStream tests passed repeatedly against a non-empty Nephtys-owned stream. They use
@@ -37,11 +37,13 @@ in this release is trading, legal, or investment advice.
 - A deliberately drifted Plutarch durable with a two-second persisted ACK wait was rejected at
   startup when the process requested 30 seconds. Brain, Executor, the Bytewax bridge, and Plutarch
   now reject correctness-relevant durable-consumer drift rather than accepting ignored settings.
-- The final Brain, Executor, Plutarch, and NATS images were rebuilt with pull and no cache. On a
-  fresh broker, the packaged services created only the `NEPHTYS` stream, archived 21/21 controlled
-  events with unique broker identities, emitted one BUY, and recorded it as `observed`. All three
-  application containers recovered against their persisted consumers after restart. The broader
-  hardened Compose drill also covered 60 synthetic events and a NATS outage/recovery cycle.
+- The final Brain, Executor, Plutarch, and NATS images were rebuilt from `c81b965` with pull and no
+  cache. On a fresh broker, the packaged services created only the `NEPHTYS` stream, archived
+  20/20 controlled events with unique broker identities, emitted one BUY, and recorded it as
+  `observed`. Brain and Executor persisted the requested 120-second ACK wait and 1,000-message
+  pending headroom; Plutarch persisted its requested 30 seconds and 100 messages. All three
+  application containers recovered against those consumers after restart. The broader hardened
+  Compose drill also covered 60 synthetic events and a NATS outage/recovery cycle.
 
 The live interoperability drill did not wait for a market-dependent strategy threshold. Synthetic
 real-broker coverage separately proves Brain-to-Executor observation and guarantees that no exchange

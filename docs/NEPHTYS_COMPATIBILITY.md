@@ -105,7 +105,7 @@ durables require a deliberate migration or a new durable name.
 
 | NME | Mercury | Nephtys | Evidence |
 |---|---|---|---|
-| 1 | `ef6c6b5` and later compatible commits | `485ecbb7beb7f0d46d58744941f21bcb981beef8` | Synthetic real-JetStream pipeline/redelivery tests plus real Coinbase connector and restart drill on 2026-07-26 |
+| 1 | `c81b965` and later compatible commits | `485ecbb7beb7f0d46d58744941f21bcb981beef8` | Synthetic real-JetStream pipeline/redelivery tests plus real Coinbase connector and restart drill on 2026-07-26 |
 
 No broader Nephtys version range is implied until tagged Nephtys releases run the same compatibility
 suite. A later commit is compatible only if it preserves NME/1 and passes the release gate.

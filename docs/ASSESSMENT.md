@@ -49,7 +49,7 @@ regressions, not proof of trading safety.
 
 | Check | Result on 2026-07-26 |
 |---|---|
-| Unit/component tests | 257 passed; 2 external-service tests skipped without a broker |
+| Unit/component tests | 258 passed; 2 external-service tests skipped without a broker |
 | Real JetStream integration | 2 passed against pinned NATS 2.14.3 |
 | Runtime-only branch-aware coverage | 71% overall |
 | Lowest runtime-module coverage | Bytewax 32%, provisioning 35%, Ray runner 36%, Brain entrypoint 52% |
@@ -57,7 +57,7 @@ regressions, not proof of trading safety.
 | Mypy, including unannotated runtime bodies | Passed |
 | Source and wheel build | Passed |
 | Locked runtime dependency audit | No known advisories reported |
-| Compose build/runtime | Final uncached build passed; all services ran as UID 10001 with read-only roots, dropped capabilities, health checks, and loopback ports; the corrected stream contract archived 21/21 fresh-broker events across application restarts |
+| Compose build/runtime | Final `c81b965` uncached build passed; all services ran as UID 10001 with read-only roots, dropped capabilities, health checks, and loopback ports; the corrected stream contract archived 20/20 fresh-broker events and all applications recovered against persisted consumers |
 | Container observation/recovery drill | 60 synthetic events archived with 60 unique stream identities; one-at-a-time service restarts and a NATS outage recovered without post-recovery errors |
 | Real Nephtys/Coinbase drill | Nephtys `485ecbb7beb7` restored its persisted BTC/EUR connector after restart; 72 real Coinbase rows archived with no duplicate stream identities or Plutarch errors |
 
