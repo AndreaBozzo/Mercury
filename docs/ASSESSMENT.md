@@ -93,11 +93,12 @@ This section records engineering constraints and primary-source context; it is n
 - `EXECUTION_MODE=observe` is the default.
 - Observation mode constructs no CCXT exchange and performs no private exchange calls.
 - Sandbox and live require an explicit exchange ID and credentials.
-- Live additionally requires an exact acknowledgement string.
+- Live mode is rejected before an exchange client is constructed.
 - Missing, corrupt, or unreachable HALT/risk state fails closed.
 - Non-finite risk/config values are rejected.
 - A volatility modulator is required by default for sizing, while no production publisher exists;
-  this intentionally blocks accidental sandbox/live execution.
+  this intentionally blocks accidental sandbox execution and remains defense in depth for any
+  future execution work.
 
 ### Contracts and modularity
 

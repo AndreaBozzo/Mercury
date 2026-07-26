@@ -23,12 +23,11 @@ execution experiments.
 |---|---:|---:|---|
 | `observe` (default) | No | No | Public alpha, feed and signal verification |
 | `sandbox` | Yes, explicitly named | Test venue only | Integration experiments where the venue has a genuine CCXT sandbox |
-| `live` | Yes, explicitly named | Real | Implemented behind two explicit gates, but **not release-ready** |
+| `live` | No | No | Recognized only to fail at startup; outside the supported release |
 
-The existence of `live` code is not evidence that it is safe to use. Open blockers include
-execution idempotency, atomic risk accounting, correct sell-side sizing, realistic backtesting,
-and operational kill-switch drills. See [ROADMAP.md](ROADMAP.md) and
-[docs/ASSESSMENT.md](docs/ASSESSMENT.md).
+Live execution is deliberately disabled because open blockers include execution idempotency,
+atomic risk accounting, correct sell-side sizing, and operational kill-switch drills. See
+[ROADMAP.md](ROADMAP.md) and [docs/ASSESSMENT.md](docs/ASSESSMENT.md).
 
 ## EU and Italy venue context
 
@@ -60,7 +59,8 @@ Nephtys ──► NATS JetStream ──► Brain ──► trade.signals ──�
 - **Brain** consumes normalized `MarketEvent` envelopes and emits `TradeSignal` intent. The
   default moving-average strategy is illustrative, not profitable evidence.
 - **Executor** checks HALT and risk state before handling signals. Observation mode records the
-  outcome without constructing a CCXT exchange. Sandbox/live modes require explicit configuration.
+  outcome without constructing a CCXT exchange. Sandbox mode requires explicit configuration;
+  live mode is rejected.
 - **Plutarch** archives raw event envelopes to Lance with ack-after-write behavior and an NDJSON
   quarantine fallback.
 - **Backtesting** replays Lance rows through the same strategy interface used by the Brain. Its
@@ -145,7 +145,7 @@ Observation mode needs only:
 EXECUTION_MODE=observe
 ```
 
-Sandbox/live additionally require:
+Sandbox mode additionally requires:
 
 ```env
 EXECUTION_EXCHANGE_ID=<ccxt-id>
@@ -158,14 +158,8 @@ EXCHANGE_PASSWORD=...  # only when required by the venue
 return static mock responses rather than simulated matching, so a successful API response is not
 equivalent to a realistic test.
 
-`live` also requires this exact acknowledgement:
-
-```env
-LIVE_TRADING_CONFIRMATION=I_UNDERSTAND_REAL_FUNDS_ARE_AT_RISK
-```
-
-Do not enable it for the current alpha. The repository still lacks safeguards listed in the
-roadmap.
+`EXECUTION_MODE=live` always raises a configuration error before constructing an exchange client.
+The repository still lacks the safeguards listed in the roadmap.
 
 ## Development checks
 

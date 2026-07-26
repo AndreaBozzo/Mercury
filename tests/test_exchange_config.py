@@ -2,8 +2,8 @@ import pytest
 
 from executor import exchange_client
 from executor.exchange_client import (
-    LIVE_TRADING_CONFIRMATION,
     ExchangeConfigurationError,
+    ensure_execution_mode_supported,
     get_exchange,
     get_execution_mode,
 )
@@ -89,25 +89,23 @@ def test_sandbox_builds_named_ccxt_exchange_and_enables_sandbox(monkeypatch):
     assert exchange.sandbox_calls == [True]
 
 
-def test_live_mode_requires_second_explicit_confirmation(monkeypatch):
+def test_live_mode_is_disabled_before_credentials_or_client_construction(monkeypatch):
+    monkeypatch.setenv("EXECUTION_MODE", "live")
+
+    with pytest.raises(ExchangeConfigurationError, match="Live execution is disabled"):
+        ensure_execution_mode_supported()
+
+
+def test_live_mode_cannot_be_enabled_with_legacy_confirmation(monkeypatch):
     monkeypatch.setenv("EXECUTION_MODE", "live")
     monkeypatch.setenv("EXECUTION_EXCHANGE_ID", "kraken")
     monkeypatch.setenv("EXCHANGE_API_KEY", "live-key")
     monkeypatch.setenv("EXCHANGE_SECRET", "live-secret")
-
-    with pytest.raises(ExchangeConfigurationError, match="LIVE_TRADING_CONFIRMATION"):
-        get_exchange()
-
-
-def test_live_mode_constructs_exchange_without_sandbox_after_confirmation(monkeypatch):
-    monkeypatch.setenv("EXECUTION_MODE", "live")
-    monkeypatch.setenv("EXECUTION_EXCHANGE_ID", "kraken")
-    monkeypatch.setenv("EXCHANGE_API_KEY", "live-key")
-    monkeypatch.setenv("EXCHANGE_SECRET", "live-secret")
-    monkeypatch.setenv("LIVE_TRADING_CONFIRMATION", LIVE_TRADING_CONFIRMATION)
+    monkeypatch.setenv(
+        "LIVE_TRADING_CONFIRMATION",
+        "I_UNDERSTAND_REAL_FUNDS_ARE_AT_RISK",
+    )
     monkeypatch.setattr(exchange_client.ccxt, "kraken", FakeExchange)
 
-    exchange = get_exchange()
-
-    assert exchange.config["apiKey"] == "live-key"
-    assert exchange.sandbox_calls == []
+    with pytest.raises(ExchangeConfigurationError, match="Live execution is disabled"):
+        get_exchange()

@@ -18,7 +18,6 @@ ORDER_CONFIRM_ATTEMPTS = int(os.getenv("ORDER_CONFIRM_ATTEMPTS", "5"))
 ORDER_CONFIRM_DELAY_SECONDS = float(os.getenv("ORDER_CONFIRM_DELAY_SECONDS", "1.0"))
 TRADE_HISTORY_PAGE_LIMIT = int(os.getenv("TRADE_HISTORY_PAGE_LIMIT", "200"))
 TRADE_HISTORY_MAX_PAGES = int(os.getenv("TRADE_HISTORY_MAX_PAGES", "25"))
-LIVE_TRADING_CONFIRMATION = "I_UNDERSTAND_REAL_FUNDS_ARE_AT_RISK"
 
 ExecutionMode = Literal["observe", "sandbox", "live"]
 
@@ -88,6 +87,18 @@ def is_observe_mode_enabled() -> bool:
     return get_execution_mode() == "observe"
 
 
+def ensure_execution_mode_supported() -> ExecutionMode:
+    """Reject real-order mode until the live-readiness blockers are implemented."""
+    mode = get_execution_mode()
+    if mode == "live":
+        raise ExchangeConfigurationError(
+            "Live execution is disabled in this release: Mercury does not yet have "
+            "durable order idempotency, atomic risk reservations, or ambiguous-order "
+            "reconciliation. Use EXECUTION_MODE=observe or a genuine sandbox."
+        )
+    return mode
+
+
 def is_dry_run_enabled() -> bool:
     """Deprecated compatibility alias; use is_observe_mode_enabled()."""
     return is_observe_mode_enabled()
@@ -99,7 +110,7 @@ def get_reconcile_symbols() -> list[str]:
 
 
 def get_exchange() -> ccxt.Exchange:
-    mode = get_execution_mode()
+    mode = ensure_execution_mode_supported()
     if mode == "observe":
         raise ExchangeConfigurationError("Observation mode does not create an exchange client")
 
@@ -111,14 +122,7 @@ def get_exchange() -> ccxt.Exchange:
             "migrate to generic EXCHANGE_* settings."
         )
     if not exchange_id:
-        raise ExchangeConfigurationError(
-            "EXECUTION_EXCHANGE_ID is required for sandbox or live execution"
-        )
-
-    if mode == "live" and os.getenv("LIVE_TRADING_CONFIRMATION") != LIVE_TRADING_CONFIRMATION:
-        raise ExchangeConfigurationError(
-            f"Live execution requires LIVE_TRADING_CONFIRMATION={LIVE_TRADING_CONFIRMATION}"
-        )
+        raise ExchangeConfigurationError("EXECUTION_EXCHANGE_ID is required for sandbox execution")
 
     api_key = os.getenv("EXCHANGE_API_KEY")
     secret_key = os.getenv("EXCHANGE_SECRET")
@@ -127,7 +131,7 @@ def get_exchange() -> ccxt.Exchange:
         secret_key = secret_key or os.getenv("BINANCE_SECRET_KEY")
     if not api_key or not secret_key:
         raise ExchangeConfigurationError(
-            "EXCHANGE_API_KEY and EXCHANGE_SECRET are required for sandbox or live execution"
+            "EXCHANGE_API_KEY and EXCHANGE_SECRET are required for sandbox execution"
         )
 
     exchange_type = getattr(ccxt, exchange_id, None)
@@ -151,11 +155,6 @@ def get_exchange() -> ccxt.Exchange:
             raise ExchangeConfigurationError(
                 f"Exchange {exchange_id!r} does not provide a usable CCXT sandbox"
             ) from exc
-    else:
-        logger.critical(
-            "EXECUTION_MODE=live — executor is targeting %s with REAL FUNDS.",
-            exchange_id,
-        )
     return exchange
 
 

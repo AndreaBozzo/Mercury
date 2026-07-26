@@ -9,6 +9,7 @@ from core.nats_utils import get_jetstream
 from core.schemas import TradeSignal
 from executor.exchange_client import (
     build_persisted_position_state,
+    ensure_execution_mode_supported,
     execute_trade,
     fetch_open_orders,
     fetch_portfolio_snapshot,
@@ -260,8 +261,12 @@ async def get_message_handler(js):
 
 
 async def main():
+    execution_mode = ensure_execution_mode_supported()
     js = await get_jetstream()
-    logger.info("Executor service started. Listening for trade signals...")
+    logger.info(
+        "Executor service started in %s mode. Listening for trade signals...",
+        execution_mode,
+    )
 
     await ensure_wallet_bucket(js)
     await reconcile_startup_state(js)

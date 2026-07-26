@@ -90,8 +90,8 @@ availability.
 
 ## Live execution: out of release scope
 
-The repository contains a doubly gated `live` mode so that the boundary is visible and testable.
-That mode is not release-ready and must remain disabled in supported deployments.
+The repository recognizes `EXECUTION_MODE=live` so that an unsafe request fails explicitly before
+an exchange client is constructed. Real-order execution is disabled in this release.
 
 At minimum, all of the following are required before a separate live-readiness review:
 
