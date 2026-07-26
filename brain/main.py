@@ -184,12 +184,7 @@ async def main() -> None:
             _BRAIN_HTTP_PORT,
         )
 
-        await js.subscribe(
-            _BRAIN_SUBJECT,
-            durable="brain_service",
-            cb=get_market_handler(js),
-            config=ConsumerConfig(max_deliver=_CONSUMER_MAX_DELIVER),
-        )
+        await subscribe_market_events(js)
 
         async with http_server:
             await http_server.serve_forever()
@@ -211,6 +206,16 @@ def get_market_handler(js):
             await msg.nak(delay=_RETRY_DELAY_SECONDS)
 
     return market_handler
+
+
+async def subscribe_market_events(js):
+    return await js.subscribe(
+        _BRAIN_SUBJECT,
+        durable="brain_service",
+        cb=get_market_handler(js),
+        config=ConsumerConfig(max_deliver=_CONSUMER_MAX_DELIVER),
+        manual_ack=True,
+    )
 
 
 async def handle_market_event(event: MarketEvent, js, broker_sequence: int | None = None) -> None:

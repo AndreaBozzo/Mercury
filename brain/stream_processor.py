@@ -70,6 +70,7 @@ from bytewax.outputs import DynamicSink, StatelessSinkPartition
 from bytewax.run import cli_main
 from nats.js import JetStreamContext
 
+from core.nats_utils import NatsSession, ensure_stream
 from core.schemas import INTENT_PLACEHOLDER_QTY, TradeSignal
 
 logger = logging.getLogger("stream_processor")
@@ -103,22 +104,32 @@ class _NatsBridge:
     async def _consume(self) -> None:
         nc = await nats.connect(servers=[self._nats_url])
         js = nc.jetstream()
+        session = NatsSession(client=nc, js=js)
         try:
-            await js.add_stream(name="nephtys_crypto", subjects=["nephtys.stream.crypto.*"])
-        except Exception:
-            pass
+            await ensure_stream(
+                js,
+                name="nephtys_crypto",
+                subjects=["nephtys.stream.crypto.*"],
+            )
 
-        async def _handler(msg) -> None:
-            try:
-                self._q.put_nowait(msg.data)
-                await msg.ack()
-            except queue.Full:
-                logger.warning("Bridge queue full — dropping message")
-                await msg.nak()
+            async def _handler(msg) -> None:
+                try:
+                    self._q.put_nowait(msg.data)
+                    await msg.ack()
+                except queue.Full:
+                    logger.warning("Bridge queue full — dropping message")
+                    await msg.nak()
 
-        await js.subscribe(self._subject, durable="stream_processor", cb=_handler)
-        while True:
-            await asyncio.sleep(1)
+            await js.subscribe(
+                self._subject,
+                durable="stream_processor",
+                cb=_handler,
+                manual_ack=True,
+            )
+            while True:
+                await asyncio.sleep(1)
+        finally:
+            await session.close()
 
     def drain(self, n: int = 200) -> list[bytes]:
         out: list[bytes] = []

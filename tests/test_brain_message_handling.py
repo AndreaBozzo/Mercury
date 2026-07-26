@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from brain.main import get_market_handler
+from brain.main import get_market_handler, subscribe_market_events
 
 
 class FakeMessage:
@@ -54,3 +54,21 @@ async def test_market_handler_naks_transient_processing_failure(monkeypatch):
     assert message.ack_count == 0
     assert message.term_count == 0
     assert message.nak_delays == [5.0]
+
+
+@pytest.mark.asyncio
+async def test_market_subscription_disables_callback_auto_ack():
+    class FakeJetStream:
+        def __init__(self):
+            self.kwargs = None
+
+        async def subscribe(self, *_args, **kwargs):
+            self.kwargs = kwargs
+
+    js = FakeJetStream()
+
+    await subscribe_market_events(js)
+
+    assert js.kwargs is not None
+    assert js.kwargs["manual_ack"] is True
+    assert js.kwargs["config"].max_deliver == 10

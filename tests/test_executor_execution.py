@@ -5,7 +5,7 @@ import pytest
 
 from core.schemas import TradeSignal
 from executor.exchange_client import ExecutionResult, execute_trade
-from executor.main import get_message_handler
+from executor.main import get_message_handler, subscribe_trade_signals
 
 
 @pytest.fixture(autouse=True)
@@ -253,6 +253,24 @@ async def test_message_handler_terminates_malformed_signal():
     assert message.ack_count == 0
     assert message.nak_delays == []
     assert message.term_count == 1
+
+
+@pytest.mark.asyncio
+async def test_trade_subscription_disables_callback_auto_ack():
+    class FakeJetStream:
+        def __init__(self):
+            self.kwargs = None
+
+        async def subscribe(self, *_args, **kwargs):
+            self.kwargs = kwargs
+
+    js = FakeJetStream()
+
+    await subscribe_trade_signals(js)
+
+    assert js.kwargs is not None
+    assert js.kwargs["manual_ack"] is True
+    assert js.kwargs["config"].max_deliver == 10
 
 
 @pytest.mark.asyncio

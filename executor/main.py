@@ -294,13 +294,7 @@ async def main():
             _EXECUTOR_HTTP_PORT,
         )
 
-        handler = await get_message_handler(js)
-        await js.subscribe(
-            "trade.signals",
-            durable="executor_service",
-            cb=handler,
-            config=ConsumerConfig(max_deliver=_CONSUMER_MAX_DELIVER),
-        )
+        await subscribe_trade_signals(js)
 
         refresh_task = asyncio.create_task(_portfolio_refresh_loop(js))
 
@@ -313,6 +307,17 @@ async def main():
                 await refresh_task
     finally:
         await session.close()
+
+
+async def subscribe_trade_signals(js):
+    handler = await get_message_handler(js)
+    return await js.subscribe(
+        "trade.signals",
+        durable="executor_service",
+        cb=handler,
+        config=ConsumerConfig(max_deliver=_CONSUMER_MAX_DELIVER),
+        manual_ack=True,
+    )
 
 
 if __name__ == "__main__":
