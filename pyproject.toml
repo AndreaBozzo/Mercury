@@ -60,6 +60,9 @@ known-first-party = ["core", "brain", "executor", "plutarch", "backtesting"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-v"
+markers = [
+    "integration: requires an external service such as a real NATS JetStream server",
+]
 
 [tool.mypy]
 python_version = "3.11"

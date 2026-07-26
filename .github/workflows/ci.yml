@@ -34,6 +34,23 @@ jobs:
       - name: Install dependencies
         run: uv sync --locked
 
+      - name: Start pinned NATS JetStream
+        run: |
+          docker run --detach --name mercury-ci-nats \
+            --publish 127.0.0.1:4222:4222 \
+            --publish 127.0.0.1:8222:8222 \
+            nats:2.14.3-alpine3.22@sha256:c11af972c99ae542de8925e6a7d9c533aa1eb039660420d2074beed6089b3bf0 \
+            -js -m 8222
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent \
+              "http://127.0.0.1:8222/healthz?js-enabled-only=true" >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs mercury-ci-nats
+          exit 1
+
       - name: Lint (ruff check)
         run: uv run ruff check .
 
@@ -45,6 +62,8 @@ jobs:
 
       - name: Run tests
         run: uv run pytest
+        env:
+          MERCURY_INTEGRATION_NATS_URL: nats://127.0.0.1:4222
 
       - name: Build distributions
         run: uv build
@@ -54,3 +73,7 @@ jobs:
           uv export --frozen --no-dev --no-hashes --format requirements-txt \
             --output-file .audit-requirements.txt
           uv run pip-audit --requirement .audit-requirements.txt
+
+      - name: Stop NATS
+        if: always()
+        run: docker rm --force mercury-ci-nats
