@@ -1,0 +1,99 @@
+name: Bug report
+description: Report a reproducible Mercury defect
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not include credentials, private endpoints, personal data, or unredacted account
+        details. Follow [SECURITY.md](https://github.com/AndreaBozzo/Mercury/security/policy)
+        instead for vulnerabilities or sensitive reports.
+
+  - type: dropdown
+    id: path
+    attributes:
+      label: Affected path
+      description: Select the closest execution or processing path.
+      options:
+        - Observation alpha (Brain, Executor observe, or Plutarch)
+        - Nephtys interoperability
+        - Backtesting
+        - Sandbox execution (experimental)
+        - Bytewax (experimental)
+        - Legacy Binance profile (experimental)
+        - Documentation or packaging
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: mercury_revision
+    attributes:
+      label: Mercury revision
+      description: Paste the exact commit SHA or release tag.
+      placeholder: git rev-parse HEAD
+    validations:
+      required: true
+
+  - type: input
+    id: nephtys_revision
+    attributes:
+      label: Nephtys revision
+      description: Required when Nephtys participates in the failure.
+      placeholder: git -C ../Nephtys rev-parse HEAD
+
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Include the OS, Python version, deployment method, and NATS version.
+      placeholder: Ubuntu 24.04, Python 3.11.15, local uv, NATS 2.14.3
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction
+      description: Provide the smallest deterministic sequence that reproduces the defect.
+      placeholder: |
+        1. Configure ...
+        2. Start ...
+        3. Publish ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Redacted evidence
+      description: Add the smallest useful log excerpt, health response, or archive metadata.
+      render: shell
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Submission checks
+      options:
+        - label: I reproduced this on the revision stated above.
+          required: true
+        - label: I removed credentials, private endpoints, personal data, and account details.
+          required: true
+        - label: This is not a vulnerability or other sensitive security report.
+          required: true

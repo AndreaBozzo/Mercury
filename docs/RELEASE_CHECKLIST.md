@@ -8,12 +8,31 @@ release notes.
 
 - [x] `LICENSE` contains Apache License 2.0 and `NOTICE` identifies the copyright owner.
 - [x] Contribution, security, conduct, support, and pull-request policies are present.
-- [ ] Enable GitHub private vulnerability reporting.
-- [ ] Protect `master` and require the CI workflow before merging.
-- [ ] Confirm issue, pull-request, and Discussions settings match the support policy.
+- [x] Issue and collaboration settings match the support policy: Issues are enabled, a pull-request
+  template and structured issue forms are present, and Discussions are intentionally disabled
+  while support is issue-based.
+- [x] CI actions and container inputs are immutable-SHA/digest pinned; Dependabot version updates
+  are configured for uv and GitHub Actions.
+- [ ] While still private, enable the dependency graph, Dependabot alerts, and Dependabot security
+  updates.
+- [ ] Push the exact release commit and wait for its CI run to pass.
+- [ ] Change repository visibility to public.
+- [ ] Immediately enable and verify private vulnerability reporting.
+- [ ] Protect `master`, require the unique `check` status, require pull requests and conversation
+  resolution, and block force pushes/deletions.
+- [ ] Confirm public secret scanning and push protection are active; enable code scanning default
+  setup and resolve any alerts before announcing the release.
 
-Do not publish a personal email address merely to satisfy the security policy. GitHub private
-vulnerability reporting is the preferred initial confidential channel.
+The GitHub API audit on 2026-07-26 found the repository private with Issues enabled, Discussions
+disabled, one active CI workflow, no release, and a successful latest pushed CI run at `92aa08a`.
+Dependabot alerts, code scanning, and secret scanning were disabled. Branch protection and rulesets
+were unavailable on the current plan while the repository remained private; GitHub enables those
+features for public repositories on GitHub Free. Private vulnerability reporting likewise becomes
+available only after the visibility change.
+
+Do not publish a personal email address merely to satisfy the security policy. Change visibility,
+enable private vulnerability reporting immediately, verify the reporting button, and only then
+announce the public release.
 
 ## Clean source verification
 
@@ -31,6 +50,7 @@ git status --short
 - [ ] CI reports 260 passes when its real-NATS integration environment is enabled.
 - [x] The source tree is clean after checks, except ignored build/test artifacts.
 - [x] The built source and wheel metadata both identify Apache-2.0.
+- [ ] Download CI's `mercury-distributions` artifact and verify `SHA256SUMS`.
 
 ## Secret and data hygiene
 
@@ -88,5 +108,5 @@ the local host.
 - [x] Summarize known alpha limitations from `README.md` and `docs/ASSESSMENT.md`.
 - [x] State explicitly that live execution is disabled and sandbox execution is experimental.
 - [x] Link the dated ESMA MiCA register rather than claiming permanent venue eligibility.
-- [ ] Tag the verified commit, attach the source/wheel artifacts produced by CI, and record their
-  checksums.
+- [ ] Tag the verified commit and attach the CI-generated source, wheel, and `SHA256SUMS` files to
+  the GitHub pre-release.

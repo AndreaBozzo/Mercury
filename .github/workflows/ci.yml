@@ -74,6 +74,22 @@ jobs:
             --output-file .audit-requirements.txt
           uv run pip-audit --requirement .audit-requirements.txt
 
+      - name: Record distribution checksums
+        run: |
+          (
+            cd dist
+            sha256sum *.tar.gz *.whl > SHA256SUMS
+            sha256sum --check SHA256SUMS
+          )
+
+      - name: Upload verified distributions
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mercury-distributions
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Stop NATS
         if: always()
         run: docker rm --force mercury-ci-nats

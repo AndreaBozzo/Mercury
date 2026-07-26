@@ -28,8 +28,9 @@ with JetStream enabled and run:
 uv run pytest -m integration
 ```
 
-The integration tests create Mercury's standard stream, consumer, and KV names. Never point them
-at a shared or production broker.
+The integration tests reuse the Nephtys-owned broad stream when it already exists, then create
+one-use subjects and durable names and remove their consumers after the run. They still publish
+test events into the selected broker, so never point them at a shared or production broker.
 
 ## Safety review rules
 

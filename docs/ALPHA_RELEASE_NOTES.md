@@ -79,8 +79,13 @@ the incompatible fields when persisted settings differ from requested correctnes
 - Backtests remain a research aid. They do not yet model latency, liquidity, partial fills, rejects,
   or a mandatory chronological/walk-forward validation protocol.
 - The sample NATS deployment has no authentication or TLS and is restricted to loopback use.
-- GitHub private vulnerability reporting, branch protection, repository collaboration settings,
-  final CI on the tagged revision, artifact checksums, and the release tag remain owner actions.
+- The 2026-07-26 GitHub settings audit found the repository private, Issues enabled, Discussions
+  disabled, CI active, no release, and the latest pushed revision green. Dependabot alerts, code
+  scanning, and secret scanning were disabled; branch protection was unavailable on the current
+  plan while private. Dependency-update configuration and CI artifact/checksum publication are now
+  present in source. Final CI on the release revision, the visibility change, immediate
+  post-publication security enablement, branch protection, and the release tag remain owner
+  actions.
 
 ## EU venue boundary
 

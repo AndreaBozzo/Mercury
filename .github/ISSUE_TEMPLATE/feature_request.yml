@@ -1,0 +1,67 @@
+name: Feature proposal
+description: Propose a narrowly scoped improvement to the research alpha
+title: "[Proposal]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Mercury prioritizes observation integrity, reproducibility, and fail-closed behavior.
+        Proposals must not assume profitability, legal venue availability, or live-capital
+        readiness.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Describe the concrete research or engineering problem without prescribing a solution.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Explain the smallest change that would solve the problem.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Intended scope
+      options:
+        - Supported observation alpha
+        - Nephtys compatibility
+        - Backtesting and research
+        - Experimental sandbox execution
+        - Experimental Bytewax path
+        - Documentation or project operations
+    validations:
+      required: true
+
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety and compatibility impact
+      description: Cover fail-closed behavior, NME/1, persistence, migrations, and tests as applicable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: checkboxes
+    id: boundaries
+    attributes:
+      label: Project boundaries
+      options:
+        - label: This proposal does not claim demonstrated profitability.
+          required: true
+        - label: This proposal does not assume that a venue is legally available in a jurisdiction.
+          required: true
+        - label: I understand that live execution is outside the supported alpha.
+          required: true

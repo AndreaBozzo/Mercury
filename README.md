@@ -227,8 +227,8 @@ uv build
 - The exact real-Nephtys/Coinbase quickstart and connector restart passed on 2026-07-26; see the
   [alpha release record](docs/ALPHA_RELEASE_NOTES.md). Nephtys connector registration persists,
   but runtime pipeline updates remain transient across restart.
-- GitHub private vulnerability reporting must be enabled in repository settings before
-  publication.
+- GitHub exposes private vulnerability reporting only after the repository is public. Enable and
+  verify it immediately after changing visibility and before announcing the public release.
 
 ## Licence
 

@@ -11,9 +11,10 @@ deployment mode.
 Do not open a public issue for a vulnerability, leaked credential, private endpoint, or other
 sensitive report.
 
-Use the repository's **Security** tab and choose **Report a vulnerability**. The repository owner
-must enable GitHub private vulnerability reporting before making Mercury public. If that option is
-not visible, contact the repository owner through their GitHub profile and ask for a private
+Use the repository's **Security** tab and choose **Report a vulnerability**. GitHub exposes private
+vulnerability reporting only for public repositories, so the repository owner must enable and
+verify it immediately after changing visibility and before announcing the release. If that option
+is not visible, contact the repository owner through their GitHub profile and ask for a private
 reporting channel without including exploit details in the initial message.
 
 Include:
