@@ -1,6 +1,6 @@
 # Public observation alpha release record
 
-- **Status:** release candidate; not yet tagged or published
+- **Status:** public pre-release `v0.2.0`
 - **Evidence date:** 2026-07-26
 - **Mercury runtime revision:** `c81b965`
 - **Nephtys revision:** `485ecbb7beb7f0d46d58744941f21bcb981beef8`
@@ -9,7 +9,7 @@
 
 ## Supported scope
 
-This candidate supports public market-data observation through Nephtys, direct Brain signal
+This release supports public market-data observation through Nephtys, direct Brain signal
 research, Executor observation records, Lance archiving, and deterministic replay/backtesting.
 Coinbase BTC/EUR is the default interoperability profile and needs no exchange credentials.
 
@@ -22,6 +22,11 @@ in this release is trading, legal, or investment advice.
 - The portable source gate passed with Ruff, formatting, mypy over 31 source files, 258
   unit/component tests, a locked-dependency audit with no known advisories, and successful source
   and wheel builds.
+- The final protected-branch GitHub Actions gate passed 260 tests with pinned real NATS, retained
+  the source/wheel distributions and `SHA256SUMS`, and the downloaded artifact verified cleanly.
+- GitHub CodeQL analyzed Python and Actions with zero open findings. Secret scanning and Dependabot
+  also reported zero open alerts. Private vulnerability reporting, push protection, dependency
+  security updates, and enforced `master` protection are enabled.
 - The two real-JetStream tests passed repeatedly against a non-empty Nephtys-owned stream. They use
   one-use subjects, and their durable consumers were removed after each run.
 - An exact Nephtys binary from the revision above registered the documented
@@ -79,13 +84,6 @@ the incompatible fields when persisted settings differ from requested correctnes
 - Backtests remain a research aid. They do not yet model latency, liquidity, partial fills, rejects,
   or a mandatory chronological/walk-forward validation protocol.
 - The sample NATS deployment has no authentication or TLS and is restricted to loopback use.
-- The 2026-07-26 GitHub settings audit found the repository private, Issues enabled, Discussions
-  disabled, CI active, no release, and the latest pushed revision green. Dependabot alerts, code
-  scanning, and secret scanning were disabled; branch protection was unavailable on the current
-  plan while private. Dependency-update configuration and CI artifact/checksum publication are now
-  present in source. Final CI on the release revision, the visibility change, immediate
-  post-publication security enablement, branch protection, and the release tag remain owner
-  actions.
 
 ## EU venue boundary
 
