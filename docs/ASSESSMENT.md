@@ -9,10 +9,10 @@
 Mercury now has a tested event-driven observation path, typed domain models, a real Lance archive,
 observable services, fail-closed execution boundaries, and a materially stronger engineering
 baseline than the repository had at the start of this review. The code is a credible
-**observation alpha**. Making the repository public still requires a final pushed CI run, the
-visibility change, immediate post-publication security enablement, branch protection, and release
-tagging. The documented Coinbase profile has now passed with an exact real Nephtys revision,
-including connector restore after a process restart.
+**observation alpha** and the repository is now public. Its final CI, dependency and secret
+controls, private vulnerability reporting, CodeQL scan, and protected-branch gates are active. The
+documented Coinbase profile passed with an exact real Nephtys revision, including connector restore
+after a process restart.
 
 It is not a live-trading system. The most important reason is not venue selection: a successfully
 submitted order can be followed by a process, NATS, or KV failure, after which JetStream may
@@ -225,7 +225,7 @@ an edge.
 | ID | Severity | Finding | Evidence and consequence | Disposition |
 |---|---|---|---|---|
 | OP-01 | High | There was no selected open-source licence. | Public source remained normally copyrighted and contribution terms were unclear. | **Resolved:** Mercury is licensed under Apache-2.0 with an owner attribution in `NOTICE`; contribution terms use the same licence. |
-| OP-02 | Medium | Security, contribution, conduct, and support policies were absent. | Vulnerability reports and contribution expectations had no defined path. | **Resolved in source:** policies, structured issue forms, and a PR template are present. GitHub exposes private vulnerability reporting only after visibility becomes public; enable and verify it immediately after that transition and before announcement. |
+| OP-02 | Medium | Security, contribution, conduct, and support policies were absent. | Vulnerability reports and contribution expectations had no defined path. | **Resolved:** policies, structured issue forms, and a PR template are present; GitHub private vulnerability reporting is enabled. |
 | OP-03 | High | Compose used mutable images and root containers. | Builds could drift; a compromise had unnecessarily broad container permissions. | **Resolved in configuration:** digest-pinned bases, fixed non-root UID, read-only roots, dropped capabilities, no-new-privileges, and reduced build contexts. |
 | OP-04 | Medium | Compose lacked complete health/dependency readiness and service exposure. | Startup order did not mean NATS was usable; Brain/Executor health was not mapped. | **Resolved in configuration:** NATS-aware service health, strategy-aware Brain readiness, health-based dependencies, restarts, and loopback-only ports. |
 | OP-05 | High | NATS has no authentication/TLS in the sample deployment. | Exposing the sample beyond loopback would expose events, risk state, and control subjects. | **Contained for alpha:** every host port binds loopback and documentation says local-only. A secured remote profile remains future work. |
@@ -234,7 +234,7 @@ an edge.
 | OP-08 | Medium | No automated end-to-end observation test existed. | Unit tests could not prove NATS/Brain/Executor/Plutarch compatibility. | **Mostly resolved:** CI runs isolated, repeatable real-NATS smoke and redelivery tests; manual service/NATS and real-Nephtys restart recovery passed. Automating the real connector/restart drill remains. |
 | OP-09 | Medium | Nephtys pipeline updates are not currently persisted. | Restart can restore a stale connector configuration; the old roadmap incorrectly said this was fixed. | Track as a generic Nephtys compatibility issue; do not claim persistence. |
 | OP-10 | Medium | Hardened Compose images had not been built in the review environment. | Static render and Dockerfile review could not catch every build/runtime ownership problem. | **Resolved during review:** an uncached pull/build, full-profile run, hardening inspection, 60-event archive drill, one-at-a-time restart, NATS outage/recovery, and clean shutdown passed. |
-| OP-11 | Medium | Public-repository security automation and branch rules are not active. | The 2026-07-26 API audit found Dependabot alerts, code scanning, and secret scanning disabled; branch protection/rulesets are unavailable on the current plan while private. | **Release gate:** enable dependency graph/Dependabot while private; after changing visibility, immediately enable private vulnerability reporting, branch protection, secret/push protection, and code scanning before announcement. |
+| OP-11 | Medium | Public-repository security automation and branch rules were not active. | Without dependency, secret, code, and branch controls, publication would unnecessarily widen supply-chain and disclosure risk. | **Resolved:** Dependabot alerts/security updates, secret scanning, push protection, CodeQL for Python/Actions, private vulnerability reporting, and enforced `master` protection are enabled; the final audit found zero open security alerts. |
 
 ## Alpha definition
 
@@ -272,23 +272,18 @@ The beta acceptance report should include:
 
 ## Recommended sequence
 
-1. Push the exact release revision and require its CI result; verify the retained distributions
-   and checksums in the [public alpha release checklist](RELEASE_CHECKLIST.md).
-2. Change visibility, immediately enable and verify public security/reporting and branch rules,
-   then tag and announce the alpha.
-3. Add an explicit on-wire version to the documented NME contract and persist Nephtys pipeline
+1. Add an explicit on-wire version to the documented NME contract and persist Nephtys pipeline
    updates.
-4. Add archive quarantine alerts, broker-lag metrics, compaction, retention, and provenance.
-5. Add chronological splits, walk-forward evaluation, cost sensitivity, and confidence intervals.
-6. Automate the manually verified Nephtys/NATS/service restart and redelivery recovery drill.
-7. Only then repair atomic sandbox execution reservations and ambiguous order reconciliation.
-8. Conduct a separate live-readiness review only if live execution remains a project goal.
+2. Add archive quarantine alerts, broker-lag metrics, compaction, retention, and provenance.
+3. Add chronological splits, walk-forward evaluation, cost sensitivity, and confidence intervals.
+4. Automate the manually verified Nephtys/NATS/service restart and redelivery recovery drill.
+5. Only then repair atomic sandbox execution reservations and ambiguous order reconciliation.
+6. Conduct a separate live-readiness review only if live execution remains a project goal.
 
 ## Decisions required from the owner
 
 These should not be guessed in code:
 
-- executing the public-visibility transition and immediate security-setting sequence;
 - whether live execution remains a long-term goal or becomes a separate private component;
 - intended user: personal research tool, research framework, or deployable trading system;
 - supported deployment target and operating budget;
