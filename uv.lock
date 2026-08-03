@@ -279,7 +279,7 @@ filecache = [
 
 [[package]]
 name = "ccxt"
-version = "4.5.68"
+version = "4.5.70"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohappyeyeballs" },
@@ -307,9 +307,9 @@ dependencies = [
     { name = "yarl" },
     { name = "zlib-ng" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/00/6e/84ed26fc535d3b063edb8586103a531775e1c83eb5ed4dd63ca3825c0844/ccxt-4.5.68.tar.gz", hash = "sha256:f35fc4591e6177d5887c65431bf24719243a9883b0e62602179587103f0407bf", size = 5954841, upload-time = "2026-07-22T13:48:47.617Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/f9/5e/9feb14d8a31762e142e88aeef02cc78c68869750054eb3f57ed3b2ea6646/ccxt-4.5.70.tar.gz", hash = "sha256:ddc3ddf4ae65d27962976e036b0b9e7803947e453699d39fcbcb696b8a348776", size = 6011490, upload-time = "2026-07-29T13:24:53.09Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/50/8d/ca5421654da87d412f200d9b0dfe6433ce54f693c852b00282ce50c76430/ccxt-4.5.68-py3-none-any.whl", hash = "sha256:da5c76822e8975c0743d3be6342ef31036069c8c922506c5c068e72786d3017b", size = 6396947, upload-time = "2026-07-22T13:48:44.746Z" },
+    { url = "https://files.pythonhosted.org/packages/4f/f6/355bf606c05e537d43fec8ea9c9a53d39a8afdaba644d04f05e3f0aa9bb9/ccxt-4.5.70-py3-none-any.whl", hash = "sha256:7e6989973979b630832ff99b8c831cc9429461cfcaebbf6569b483ef5627fc1f", size = 6455764, upload-time = "2026-07-29T13:24:50.668Z" },
 ]
 
 [[package]]
@@ -946,7 +946,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bytewax", specifier = ">=0.21.0" },
-    { name = "ccxt", specifier = ">=4.5.42" },
+    { name = "ccxt", specifier = ">=4.5.70" },
     { name = "nats-py", specifier = ">=2.14.0" },
     { name = "pandas", specifier = ">=3.0.1" },
     { name = "polars", specifier = ">=1.0.0" },
