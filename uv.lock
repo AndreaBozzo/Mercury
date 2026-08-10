@@ -279,7 +279,7 @@ filecache = [
 
 [[package]]
 name = "ccxt"
-version = "4.5.68"
+version = "4.5.71"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "aiohappyeyeballs" },
@@ -299,7 +299,6 @@ dependencies = [
     { name = "propcache" },
     { name = "pycparser" },
     { name = "requests" },
-    { name = "setuptools" },
     { name = "typing-extensions" },
     { name = "urllib3" },
     { name = "uvloop", marker = "implementation_name == 'cpython' and sys_platform != 'win32'" },
@@ -307,9 +306,9 @@ dependencies = [
     { name = "yarl" },
     { name = "zlib-ng" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/00/6e/84ed26fc535d3b063edb8586103a531775e1c83eb5ed4dd63ca3825c0844/ccxt-4.5.68.tar.gz", hash = "sha256:f35fc4591e6177d5887c65431bf24719243a9883b0e62602179587103f0407bf", size = 5954841, upload-time = "2026-07-22T13:48:47.617Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c2/99/7ff0cd5ec0ec97a558b7396f0885e976ec3b5094315bdbc05540c6306c22/ccxt-4.5.71.tar.gz", hash = "sha256:171f9dd4c9c915b5e8dadf2730ebd9c675b590c7f03b0e420841f03a5a2195f8", size = 5956203, upload-time = "2026-08-04T10:38:15.911Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/50/8d/ca5421654da87d412f200d9b0dfe6433ce54f693c852b00282ce50c76430/ccxt-4.5.68-py3-none-any.whl", hash = "sha256:da5c76822e8975c0743d3be6342ef31036069c8c922506c5c068e72786d3017b", size = 6396947, upload-time = "2026-07-22T13:48:44.746Z" },
+    { url = "https://files.pythonhosted.org/packages/9e/9b/c47bb2d78314ac3480d3505e872cb8cf157a5c888d0338d9b3f4ea9daa54/ccxt-4.5.71-py3-none-any.whl", hash = "sha256:936d01e84c47f4a6ce711962881cef5b094a1d39d4574fd08e186bd10160cf8c", size = 6395681, upload-time = "2026-08-04T10:38:13.372Z" },
 ]
 
 [[package]]
@@ -946,7 +945,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "bytewax", specifier = ">=0.21.0" },
-    { name = "ccxt", specifier = ">=4.5.42" },
+    { name = "ccxt", specifier = ">=4.5.71" },
     { name = "nats-py", specifier = ">=2.14.0" },
     { name = "pandas", specifier = ">=3.0.1" },
     { name = "polars", specifier = ">=1.0.0" },
@@ -2293,15 +2292,6 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/b2/1d/1b2ef7bcde851c78d7f17f1cca13fd6dc695fc4b3d6197941e72cae5b132/ruff-0.16.0-py3-none-win32.whl", hash = "sha256:7fab76fa065c873f41ff744347c6e77bcc3dfec4bcc754dc26b63d23c0f7f5fb", size = 10785885, upload-time = "2026-07-23T19:11:23.947Z" },
     { url = "https://files.pythonhosted.org/packages/b2/a3/d5e4ef7a56be3f928ffb90b94c25ba7d3cb9c7fe0736aeaaedf361770712/ruff-0.16.0-py3-none-win_amd64.whl", hash = "sha256:429c117f022bf481fabd9d551e7a3952b24c65e6ef44337ea09d90bebef14472", size = 11923141, upload-time = "2026-07-23T19:11:26.409Z" },
     { url = "https://files.pythonhosted.org/packages/cb/9a/8415f2657cbe200f41a4531ccededf135505a92d4a012229121f885b26f9/ruff-0.16.0-py3-none-win_arm64.whl", hash = "sha256:14296fedcd2705c77ab8235439278bbb38f285cf7da5528b00b3e330c3d4872d", size = 11273407, upload-time = "2026-07-23T19:11:28.705Z" },
-]
-
-[[package]]
-name = "setuptools"
-version = "83.0.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/34/26/f5d29e25ffdb535afef2d35cdb55b325298f96debd670da4c325e08d70f4/setuptools-83.0.0.tar.gz", hash = "sha256:025bccbbf0fa05b6192bc64ae1e7b16e001fd6d6d4d5de03c97b1c1ade523bef", size = 1154254, upload-time = "2026-07-04T15:31:22.699Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/5d/40/e1e72872c6354b306daef1703549e8e83b4d43cfea356311bf722a043752/setuptools-83.0.0-py3-none-any.whl", hash = "sha256:29b23c360f22f414dc7336bb39178cc7bcbf6021ed2733cde173f09dba19abb3", size = 1008090, upload-time = "2026-07-04T15:31:20.885Z" },
 ]
 
 [[package]]
